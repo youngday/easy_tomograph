@@ -13,10 +13,19 @@ conda with cupy (uv not ok ,for cuda and other),todo:uv
 ### batch_view.py
  dicom to picture 
 ### fbp_vs_ir.py 
+
+* fbp filters
+![alt text](img_out/fbp_group.png)
+* ![alt text](img_out/gpu_ir_group.png)
 fbp vs ir 
 ### fbp_plus_ir.py
 fbp first and then to ir 
-
+![alt text](img_out/fbp_plus_ir.png)
 ### install and start
 
 just some install step ,todo:more steps.
+
+
+
+
+
