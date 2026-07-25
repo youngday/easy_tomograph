@@ -14,7 +14,12 @@ uv run fbp_vs_ir.py
 
 ## TIGRE
 
-# 下载源码
+uv pip install tigre
+
+##  下载源码
+
+NOTE:install failed,with api bugs,waiting for new version.
+
 wget https://github.com/CERN/TIGRE/archive/refs/tags/v3.1.3.tar.gz
 tar xzf v3.1.3.tar.gz
 cd TIGRE-3.1.3
@@ -26,6 +31,9 @@ tar xzf /tmp/TIGRE-3.1.3.tar.gz -C /tmp && echo "Extract OK" && ls /tmp/TIGRE-3.
 uv pip install numpy scipy matplotlib h5py tqdm 2>&1 | tail -5
 uv pip install /tmp/TIGRE-3.1.3 2>&1
 
+
+
+uv pip install --upgrade git+https://github.com/CERN/TIGRE.git@v3.1.3 2>&1 | tail -20
 
 ## tomophantom
 
