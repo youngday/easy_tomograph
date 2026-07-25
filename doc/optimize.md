@@ -8,3 +8,74 @@
 |------|------|
 | `astra_hybrid.py` | ① 前向投影改为 ASTRA GPU (`create_sino`)，消除模型不匹配 ② 保持 `rec_fbp` (原始单位) 做 IR 初始化 ③ 新增 **F 节**: 达标耗时对比 |
 | `tigre_hybrid.py` | ① 新增 **F 节**: 达标耗时对比 ② 迭代次数扩展至 [5,10,20,30,50] / [10,20,50,100,200] ③ 修复缩进 / 输出文件名
+
+
+## 最终对比结果
+
+两个脚本都跑完了。来看看完整对比：
+
+### 速度 vs 质量总表 (优化后)
+
+| 算法 | ASTRA 耗时 | ASTRA RMSE | TIGRE 耗时 | TIGRE RMSE |
+|------|-----------|-----------|-----------|-----------|
+| **FBP** | **23ms** ⚡ | 134.61 | 40ms | **131.19** |
+| **Pure CGLS x50** | **140ms** ⚡ | 112.28 | 3269ms | 120.77 |
+| **FBP+CGLS x50** | **143ms** ⚡ | 110.73 | 3321ms | **92.00** ✅ |
+| **Pure SIRT x200** | **507ms** ⚡ | 200.03 | 8472ms | 195.59 |
+| **FBP+SIRT x200** | **513ms** ⚡ | 125.45 | 8535ms | **110.98** ✅ |
+
+### 达标耗时对比 (混合法的真正优势)
+
+| 对比项 | ASTRA | TIGRE |
+|-------|-------|-------|
+| **CGLS: 达到 RMSE~120 所需时间** | Pure: 140ms / Hybrid: **143ms** (≈相同) | Pure: 3269ms / Hybrid: **1701ms** (↓48%) |
+| **SIRT: 达到 RMSE~200 所需时间** | Pure: 507ms / Hybrid: **34ms** (↓93%!) | Pure: 8472ms / Hybrid: **845ms** (↓90%!) |
+| **SIRT: 混合 x10 质量 vs 纯 x200** | **134.0 (更好)** vs 200.0 | **175.8 (更好)** vs 195.6 |
+
+### 关键发现
+
+```mermaid
+flowchart TD
+    subgraph ASTRA_优势["ASTRA 优势"]
+        A1["速度碾压<br>CGLS: 140ms vs 3269ms<br>SIRT: 507ms vs 8472ms"]
+        A2["FBP+SIRT x10 性价比极高<br>34ms 达 RMSE=134<br>比纯 SIRT x200 快 15x 且质量更好"]
+    end
+    
+    subgraph TIGRE_优势["TIGRE 优势"]
+        T1["最高精度天花板<br>FBP+CGLS x50: RMSE=92<br>比 ASTRA 好 17%"]
+        T2["CGLS 混合有 48% 时间节省<br>(ASTRA CGLS 混合无时间节省)"]
+    end
+
+    subgraph 共同点["共同点"]
+        C1["SIRT 混合时间节省巨大: ~90%"]
+        C2["FBP 初始化对 SIRT 收益远大于 CGLS"]
+    end
+```
+
+### 为什么 ASTRA CGLS 混合没有时间节省？
+
+ASTRA 的 CGLS x5 从 FBP 起步：RMSE=129.33（已接近最优 110.73）
+纯 CGLS x5 从零起步：RMSE=381.62（差得远）
+
+但到了 x50 两者都收敛到 110-112。因为：
+- **ASTRA 算子匹配后 CGLS 收敛极快**（每步仅 ~2-3ms），纯 CGLS 从零起步也能在 50 次内充分收敛
+- 混合的收益在迭代早期体现（FBP+CGLS x5 vs 纯 CGLS x5: 129 vs 381），但 ASTRA 每步太快（~2ms），这点收益不如 TIGRE 明显（每步 ~60ms）
+
+### 最终选择指南
+
+```mermaid
+flowchart LR
+    Q["你的需求?"] --> S["< 30ms"]
+    Q --> B["30-200ms"]
+    Q --> H["200-500ms"]
+    Q --> P["> 1s 可接受"]
+    
+    S --> S1["ASTRA FBP<br>23ms, RMSE=135"]
+    B --> B1["ASTRA FBP+CGLS x10<br>35ms, RMSE=122"]
+    H --> H1["ASTRA FBP+SIRT x100<br>252ms, RMSE=129"]
+    P --> P1["TIGRE FBP+CGLS x50<br>3321ms, RMSE=92 ⭐"]
+```
+
+结果已保存至：
+- `img_out/astra_hybrid.png` + `astra_hybrid_summary.json`
+- `img_out/tigre_hybrid.png` + `tigre_hybrid_summary.json`
