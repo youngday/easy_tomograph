@@ -1,5 +1,42 @@
 # optimize
 
+## optimize #004 CBCT
+
+**OS-SART 用 SIRT3D 子集交替实现成功！** 🎉
+
+## 最终锥束完整结果 (32×512×512, 360角度)
+
+| 方法 | 耗时 | RMSE | SSIM | 比 FDK 改善 |
+|------|:---:|:----:|:----:|:----------:|
+| **Pure FDK** | **408ms** ⚡ | 0.00170 | 0.961 | 基线 |
+| **FBP+SIRT3D x50** | 13957ms | 0.00127 | 0.979 | RMSE↓25% |
+| **FBP+OS-SART x10** | **8327ms** 💎 | **0.00098** ✅ | **0.987** ✅ | **RMSE↓42%** |
+
+**OS-SART 核心优势：**
+- 比 SIRT 快 **40%**（8327ms vs 13957ms）
+- 比 SIRT 精度高 **23%**（RMSE 0.00098 vs 0.00127）
+- 比 FDK 精度高 **42%**（RMSE 0.00098 vs 0.00170）
+
+**ASTRA vs TIGRE (同体模):**
+```
+指标               ASTRA        TIGRE
+FDK RMSE         0.00170 ✅   0.00521
+SIRT x50 RMSE    0.00127 ✅   0.00331
+OS-SART RMSE     0.00098 ✅   0.00324
+```
+
+ASTRA 在锥束 SIRT 上精度全面优于 TIGRE，且 OS-SART 实现成功。不过目前 OS-SART 的速度优势主要体现在质量而非时间上——因为每子集创建/销毁 ASTRA 对象有开销。
+
+现在你手上有 **5 个脚本** 覆盖了完整的对比维度：
+
+```
+2D平行束:  astra_hybrid.py (SIRT+SART+OS-SART, 10ms)
+           tigre_hybrid.py (SIRT, RMSE最低)
+
+3D锥束:    astra_cone_hybrid.py (SIRT+OS-SART, 精度最高 ⭐)
+           tigre_cone_hybrid.py (SIRT+OS-SART, 唯一OS-SART原生)
+```
+
 ## optimize #003
 
 OS-SART 运行成功！关键结果：
