@@ -1,17 +1,16 @@
 # start
 
-## 
-
+##
 
 # 激活环境
+
 conda activate tomo-test
 
 # 运行测试
+
 python fbp_test.py
 
-
-
-## dicom view 
+## dicom view
 
 ```sh
 
@@ -29,3 +28,4 @@ python batch_view.py dicom_output/ --save
 
 # 查看单个文件
 python batch_view.py --file dicom_output/recon_fbp.dcm
+```

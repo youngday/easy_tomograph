@@ -1,6 +1,6 @@
 """
-FBP + IR 混合重建
-=================
+FBP + IR 混合重建 (TIGRE GPU)
+=============================
 核心思想: 用 FBP 的快速重建结果作为迭代法 (CGLS/SIRT) 的初始值,
           让 IR 从更好的起点开始迭代 → 更快收敛 + 更高质量
 
@@ -12,35 +12,32 @@ FBP + IR 混合重建
   - FBP + SIRT (混合)
 
 模式:
-  - GPU 模式: 使用 ASTRA toolbox (CUDA 加速), 需安装 astra-toolbox + CUDA
-
-与 fbp_vs_ir.py 的区别:
-  - gpu_fbp_vs_ir.py: 纯方法对比 (FBP vs CGLS vs SIRT)
-  - fbp_plus_ir.py:   混合方法 (FBP初始化+IR迭代)
+  - GPU 模式: 使用 TIGRE Toolbox (CUDA 加速)
 """
 
 import numpy as np
 from time import time
 from skimage.data import shepp_logan_phantom
-from skimage.transform import radon, resize
+from skimage.transform import resize
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 import os, json
 
 # ============================================================
-# 后端检测: GPU (ASTRA) vs CPU (numpy)
+# 后端检测: 需要 TIGRE
 # ============================================================
 try:
-    import astra
+    import tigre
+    import tigre.algorithms as algs
 except ImportError:
     print("=" * 60)
-    print("错误: 需要 ASTRA Toolbox (GPU 版本)")
-    print("安装: uv pip install astra-toolbox")
+    print("错误: 需要 TIGRE Toolbox (GPU 版本)")
+    print("安装: git+https://github.com/CERN/TIGRE.git")
     print("=" * 60)
     exit(1)
 
 print("=" * 60)
-print("FBP + IR 混合重建对比  [后端: GPU (ASTRA CUDA)]")
+print("FBP + IR 混合重建对比  [后端: GPU (TIGRE CUDA)]")
 print("=" * 60)
 
 # ============================================================
@@ -58,21 +55,58 @@ p = resize(shepp_logan_phantom(), (N, N), anti_aliasing=True)
 ct = p * 2000 - 1000  # 缩放到近似 HU 值
 Y, X = np.ogrid[:N, :N]
 circ_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= (N / 2 * 0.95) ** 2
+# 用于线性拟合的紧致遮罩 (排除边缘振铃伪影)
+# fit_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= (N / 2 * 0.85) ** 2
 ct[~circ_mask] = -1000
 
+# 余弦软遮罩 (平滑过渡到边缘, 消除条纹)
+# soft_radius = N / 2 * 0.95
+# soft_edge = N / 2 * 0.05  # 5% 过渡带
+# dist = np.sqrt((X - N / 2) ** 2 + (Y - N / 2) ** 2)
+# soft_mask = np.clip((soft_radius + soft_edge - dist) / soft_edge, 0, 1)
+
 # ============================================================
-# 2. 正向投影
+# 2. 正向投影 (TIGRE GPU)
 # ============================================================
 theta_deg = np.linspace(0, 180, n_angles, endpoint=False)
-sino = radon(ct, theta=theta_deg, circle=False)
-D = sino.shape[0]
+theta_rad = np.deg2rad(theta_deg).astype(np.float32)
+
+# TIGRE 2D 几何: nVoxel = (z, y, x), nDetector = (v, u)
+D = int(np.ceil(N * np.sqrt(2)))  # 探测器覆盖体模对角线
+
+geo = tigre.geometry()
+geo.DSD = 1536
+geo.DSO = 1000
+geo.nVoxel = np.array([1, N, N])          # (z, y, x)
+geo.sVoxel = np.array([1, N, N])          # (mm)
+geo.dVoxel = geo.sVoxel / geo.nVoxel      # (1, 1, 1) mm
+geo.nDetector = np.array([1, D])          # (v, u)
+geo.dDetector = np.array([1.0, N/D])       # 探测器 FOV = N, 匹配体模, 避免竖条纹
+geo.sDetector = geo.nDetector * geo.dDetector
+geo.offOrigin = np.array([0, 0, 0])
+geo.offDetector = np.array([0, 0])
+geo.mode = 'parallel'
+
+angles = theta_rad  # 弧度
+
+# 体模 → TIGRE 3D 格式 (1, N, N)
+vol_gt = ct[np.newaxis, :, :].astype(np.float32)
+
+print("GPU 正向投影...")
+t0 = time()
+sino_3d = tigre.Ax(vol_gt, geo, angles)
+print(f"   完成: 耗时 {(time()-t0)*1000:.0f}ms, 投影形状 {sino_3d.shape}")
+# sino_3d: (n_angles, 1, D) → squeeze to (n_angles, D)
+sino = sino_3d[:, 0, :]
 
 # ============================================================
 # 辅助函数
 # ============================================================
 def linear_scale(rec):
-    mask = circ_mask & (np.abs(rec) < 2000)
-    A = np.column_stack([rec.ravel()[mask.ravel()], np.ones(mask.sum())])
+    # 先裁剪极端值, 再用全圆形遮罩做线性拟合
+    rec_clip = np.clip(rec, -5000, 5000)
+    mask = circ_mask
+    A = np.column_stack([rec_clip.ravel()[mask.ravel()], np.ones(mask.sum())])
     b = ct.ravel()[mask.ravel()]
     coef, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
     return rec * coef[0] + coef[1]
@@ -88,174 +122,142 @@ def calc_ssim(rec):
     return (2 * mu_x * mu_y + c1) * (2 * sig_xy + c2) / \
            ((mu_x ** 2 + mu_y ** 2 + c1) * (sig_x + sig_y + c2))
 
-# ============================================================
-# GPU 路径 (ASTRA)
-# ============================================================
-# 同一几何坐标系
-theta_rad = np.deg2rad(theta_deg).astype(np.float32)
-proj_geom = astra.create_proj_geom('parallel', 1.0, D, theta_rad)
-vol_geom = astra.create_vol_geom(N, N)
-
 # GPU 预热
 print("GPU 预热...")
-sino = np.ascontiguousarray(sino.T)
-sid = astra.data2d.create('-sino', proj_geom, sino)
-rid = astra.data2d.create('-vol', vol_geom)
-for algo in ['FBP_CUDA', 'CGLS_CUDA']:
-    cfg = astra.astra_dict(algo)
-    cfg['ProjectionDataId'] = sid
-    cfg['ReconstructionDataId'] = rid
-    if algo == 'CGLS_CUDA':
-        cfg['option'] = {'GPUindex': 0}
-    aid = astra.algorithm.create(cfg)
-    astra.algorithm.run(aid, 1)
-    astra.algorithm.delete(aid)
-astra.data2d.delete(rid)
-astra.data2d.delete(sid)
+_ = algs.fdk(sino_3d, geo, angles)
+_ = algs.cgls(sino_3d, geo, angles, 1)
+_ = algs.sirt(sino_3d, geo, angles, 1)
 print("   预热完成\n")
 
-# ---- A. Pure FBP (基线) ----
+# ============================================================
+# A. Pure FBP (基线)
+# ============================================================
 print("-" * 55)
-print("A. Pure FBP (ASTRA FBP_CUDA shepp-logan)")
+print("A. Pure FBP (TIGRE FDK shepp_logan)")
 print("-" * 55)
 t0 = time()
-sid = astra.data2d.create('-sino', proj_geom, sino)
-rid = astra.data2d.create('-vol', vol_geom)
-cfg = astra.astra_dict('FBP_CUDA')
-cfg['ProjectionDataId'] = sid
-cfg['ReconstructionDataId'] = rid
-cfg['option'] = {'FilterType': 'shepp-logan'}
-aid = astra.algorithm.create(cfg)
-astra.algorithm.run(aid)
-t_fbp = time() - t0
-rec_fbp = astra.data2d.get(rid).copy()
-fbp_rec = linear_scale(astra.data2d.get(rid))
+rec_fdk_3d = algs.fdk(sino_3d, geo, angles, filter='shepp_logan')
+fbp_rec = linear_scale(rec_fdk_3d[0])
 fbp_t = time() - t0
 fbp_rmse = calc_rmse(fbp_rec)
 fbp_ssim = calc_ssim(fbp_rec)
-astra.algorithm.delete(aid)
-astra.data2d.delete(rid)
-astra.data2d.delete(sid)
-print(f"   RMSE={fbp_rmse:.2f}, SSIM={fbp_ssim:.4f}, {fbp_t*1000:.0f}ms")
-print("   注: 与 gpu_fbp_vs_ir.py 的 FBP_CUDA shepp-logan 结果可比")
+print(f"   RMSE={fbp_rmse:.2f}, SSIM={fbp_ssim:.4f}, {fbp_t*1000:.0f}ms (TIGRE FDK shepp_logan)")
 
-# ---- B. Pure CGLS (从零开始) ----
+# ============================================================
+# B. Pure CGLS (从零开始)
+# ============================================================
 print("-" * 55)
 print("B. Pure CGLS (从零开始)")
 print("-" * 55)
-sid = astra.data2d.create('-sino', proj_geom, sino)
 cgls_hist = []
 best_cgls = {'rmse': 1e9, 'ssim': -1, 'rec': None, 't': 0, 'n': 0}
-cgls_iters = [5, 10, 20, 30, 50]
+cgls_iters = [5, 10, 20, 30, 50]  # x50 后收益递减
+
+rec_cgls_3d = None
+prev_n = 0
 for n_iter in cgls_iters:
-    rid = astra.data2d.create('-vol', vol_geom)
-    cfg = astra.astra_dict('CGLS_CUDA')
-    cfg['ProjectionDataId'] = sid
-    cfg['ReconstructionDataId'] = rid
-    cfg['option'] = {'GPUindex': 0}
-    aid = astra.algorithm.create(cfg)
     t0 = time()
-    astra.algorithm.run(aid, n_iter)
-    rec = linear_scale(astra.data2d.get(rid))
+    if rec_cgls_3d is None:
+        rec_cgls_3d = algs.cgls(sino_3d, geo, angles, niter=n_iter)
+    else:
+        rec_cgls_3d = algs.cgls(sino_3d, geo, angles, niter=n_iter - prev_n,
+                                init=rec_cgls_3d)
     t = time() - t0
-    r, s = calc_rmse(rec), calc_ssim(rec)
+    rec2d = linear_scale(rec_cgls_3d[0])
+    r, s = calc_rmse(rec2d), calc_ssim(rec2d)
     cgls_hist.append((n_iter, t, r, s))
     if r < best_cgls['rmse']:
-        best_cgls = {'rmse': r, 'ssim': s, 'rec': rec, 't': t, 'n': n_iter}
-    astra.algorithm.delete(aid)
-    astra.data2d.delete(rid)
+        best_cgls = {'rmse': r, 'ssim': s, 'rec': rec2d, 't': t, 'n': n_iter}
     print(f"   x{n_iter:3d}: RMSE={r:.2f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-astra.data2d.delete(sid)
+    prev_n = n_iter
+
 print(f"   >> 最优: CGLS x{best_cgls['n']}: RMSE={best_cgls['rmse']:.2f}, SSIM={best_cgls['ssim']:.4f}, {best_cgls['t']*1000:.0f}ms")
 
-# ---- C. FBP + CGLS (混合) ----
+# ============================================================
+# C. FBP + CGLS (混合)
+# ============================================================
 print("-" * 55)
 print("C. FBP + CGLS (FBP 初始值)")
 print("-" * 55)
-sid = astra.data2d.create('-sino', proj_geom, sino)
 fbc_hist = []
 best_fc = {'rmse': 1e9, 'ssim': -1, 'rec': None, 't': 0, 'n': 0}
+rec_fbc_3d = rec_fdk_3d.copy()
+prev_n = 0
 for n_iter in cgls_iters:
-    rid = astra.data2d.create('-vol', vol_geom, data=fbp_rec.astype(np.float32))
-    cfg = astra.astra_dict('CGLS_CUDA')
-    cfg['ProjectionDataId'] = sid
-    cfg['ReconstructionDataId'] = rid
-    cfg['option'] = {'GPUindex': 0}
-    aid = astra.algorithm.create(cfg)
     t0 = time()
-    astra.algorithm.run(aid, n_iter)
-    rec = linear_scale(astra.data2d.get(rid))
+    rec_fbc_3d = algs.cgls(sino_3d, geo, angles, niter=n_iter - prev_n,
+                           init=rec_fbc_3d)
     t = time() - t0
-    r, s = calc_rmse(rec), calc_ssim(rec)
+    rec2d = linear_scale(rec_fbc_3d[0])
+    r, s = calc_rmse(rec2d), calc_ssim(rec2d)
     fbc_hist.append((n_iter, t, r, s))
     if r < best_fc['rmse']:
-        best_fc = {'rmse': r, 'ssim': s, 'rec': rec, 't': t, 'n': n_iter}
-    astra.algorithm.delete(aid)
-    astra.data2d.delete(rid)
+        best_fc = {'rmse': r, 'ssim': s, 'rec': rec2d, 't': t, 'n': n_iter}
     print(f"   x{n_iter:3d}: RMSE={r:.2f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-astra.data2d.delete(sid)
+    prev_n = n_iter
+
 print(f"   >> 最优: FBP+CGLS x{best_fc['n']}: RMSE={best_fc['rmse']:.2f}, SSIM={best_fc['ssim']:.4f}, {best_fc['t']*1000:.0f}ms")
 
-# ---- D. Pure SIRT (从零开始) ----
+# ============================================================
+# D. Pure SIRT (从零开始)
+# ============================================================
 print("-" * 55)
 print("D. Pure SIRT (从零开始)")
 print("-" * 55)
-sid = astra.data2d.create('-sino', proj_geom, sino)
 sirt_hist = []
 best_sirt = {'rmse': 1e9, 'ssim': -1, 'rec': None, 't': 0, 'n': 0}
-sirt_iters = [10, 20, 50, 100, 200]
+sirt_iters = [10, 20, 50, 100, 200]  # x200 后太慢
+
+rec_sirt_3d = None
+prev_n = 0
 for n_iter in sirt_iters:
-    rid = astra.data2d.create('-vol', vol_geom)
-    cfg = astra.astra_dict('SIRT_CUDA')
-    cfg['ProjectionDataId'] = sid
-    cfg['ReconstructionDataId'] = rid
-    cfg['option'] = {'GPUindex': 0}
-    aid = astra.algorithm.create(cfg)
     t0 = time()
-    astra.algorithm.run(aid, n_iter)
-    rec = linear_scale(astra.data2d.get(rid))
+    if rec_sirt_3d is None:
+        rec_sirt_3d = algs.sirt(sino_3d, geo, angles, niter=n_iter, noneg=False)
+    else:
+        rec_sirt_3d = algs.sirt(sino_3d, geo, angles, niter=n_iter - prev_n,
+                                init=rec_sirt_3d, noneg=False)
     t = time() - t0
-    r, s = calc_rmse(rec), calc_ssim(rec)
+    rec2d = linear_scale(rec_sirt_3d[0])
+    r, s = calc_rmse(rec2d), calc_ssim(rec2d)
     sirt_hist.append((n_iter, t, r, s))
     if r < best_sirt['rmse']:
-        best_sirt = {'rmse': r, 'ssim': s, 'rec': rec, 't': t, 'n': n_iter}
-    astra.algorithm.delete(aid)
-    astra.data2d.delete(rid)
+        best_sirt = {'rmse': r, 'ssim': s, 'rec': rec2d, 't': t, 'n': n_iter}
     print(f"   x{n_iter:4d}: RMSE={r:.2f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-astra.data2d.delete(sid)
+    prev_n = n_iter
+
 print(f"   >> 最优: SIRT x{best_sirt['n']}: RMSE={best_sirt['rmse']:.2f}, SSIM={best_sirt['ssim']:.4f}, {best_sirt['t']*1000:.0f}ms")
 
-# ---- E. FBP + SIRT (混合) ----
+# ============================================================
+# E. FBP + SIRT (混合)
+# ============================================================
 print("-" * 55)
 print("E. FBP + SIRT (FBP 初始值)")
 print("-" * 55)
-sid = astra.data2d.create('-sino', proj_geom, sino)
 fbs_hist = []
 best_fs = {'rmse': 1e9, 'ssim': -1, 'rec': None, 't': 0, 'n': 0}
+rec_fbs_3d = rec_fdk_3d.copy()
+prev_n = 0
 for n_iter in sirt_iters:
-    rid = astra.data2d.create('-vol', vol_geom, data=fbp_rec.astype(np.float32))
-    cfg = astra.astra_dict('SIRT_CUDA')
-    cfg['ProjectionDataId'] = sid
-    cfg['ReconstructionDataId'] = rid
-    cfg['option'] = {'GPUindex': 0}
-    aid = astra.algorithm.create(cfg)
     t0 = time()
-    astra.algorithm.run(aid, n_iter)
-    rec = linear_scale(astra.data2d.get(rid))
+    rec_fbs_3d = algs.sirt(sino_3d, geo, angles, niter=n_iter - prev_n,
+                           init=rec_fbs_3d, noneg=False)
     t = time() - t0
-    r, s = calc_rmse(rec), calc_ssim(rec)
+    rec2d = linear_scale(rec_fbs_3d[0])
+    r, s = calc_rmse(rec2d), calc_ssim(rec2d)
     fbs_hist.append((n_iter, t, r, s))
     if r < best_fs['rmse']:
-        best_fs = {'rmse': r, 'ssim': s, 'rec': rec, 't': t, 'n': n_iter}
-    astra.algorithm.delete(aid)
-    astra.data2d.delete(rid)
+        best_fs = {'rmse': r, 'ssim': s, 'rec': rec2d, 't': t, 'n': n_iter}
     print(f"   x{n_iter:4d}: RMSE={r:.2f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-astra.data2d.delete(sid)
+    prev_n = n_iter
+
 print(f"   >> 最优: FBP+SIRT x{best_fs['n']}: RMSE={best_fs['rmse']:.2f}, SSIM={best_fs['ssim']:.4f}, {best_fs['t']*1000:.0f}ms")
 
+# ============================================================
 # 结果列表
+# ============================================================
 results = [
-    ('Pure FBP (shepp-logan)', fbp_t, fbp_rmse, fbp_ssim, 0),
+    ('Pure FBP (shepp_logan)', fbp_t, fbp_rmse, fbp_ssim, 0),
     ('Pure CGLS (from zero)', best_cgls['t'], best_cgls['rmse'], best_cgls['ssim'],
      (fbp_rmse - best_cgls['rmse']) / fbp_rmse * 100),
     ('FBP + CGLS (hybrid)', best_fc['t'], best_fc['rmse'], best_fc['ssim'],
@@ -270,7 +272,7 @@ results = [
 # 汇总结果
 # ============================================================
 print("\n" + "=" * 60)
-print("汇总对比")
+print("汇总对比 (最优迭代)")
 print("=" * 60)
 print(f"{'算法':35s} {'耗时(ms)':>10s} {'RMSE':>8s} {'SSIM':>8s} {'提升':>10s}")
 print("-" * 71)
@@ -285,8 +287,43 @@ print(f"   FBP+CGLS vs Pure CGLS: RMSE {'降低' if fc_imp>=0 else '升高'} {ab
 print(f"   FBP+SIRT vs Pure SIRT: RMSE {'降低' if fs_imp>=0 else '升高'} {abs(fs_imp):+.1f}%")
 
 # ============================================================
-# 可视化
+# 等迭代次数对比 (展示混合方法的真正优势)
 # ============================================================
+print("\n" + "=" * 60)
+print("等迭代次数对比 (混合 vs 纯 IR)")
+print("=" * 60)
+print(f"{'迭代数':>8s} {'Pure CGLS':>12s} {'FBP+CGLS':>12s} {'改善':>10s}  |  {'Pure SIRT':>12s} {'FBP+SIRT':>12s} {'改善':>10s}")
+print("-" * 76)
+# 找共同迭代次数
+common_iters = set(cgls_iters) & set(sirt_iters)
+for n in sorted(common_iters):
+    cg = next((h for h in cgls_hist if h[0] == n), None)
+    fc = next((h for h in fbc_hist if h[0] == n), None)
+    sr = next((h for h in sirt_hist if h[0] == n), None)
+    fs = next((h for h in fbs_hist if h[0] == n), None)
+    
+    cg_str = f"{cg[2]:.1f}" if cg else "-"
+    fc_str = f"{fc[2]:.1f}" if fc else "-"
+    sr_str = f"{sr[2]:.1f}" if sr else "-"
+    fs_str = f"{fs[2]:.1f}" if fs else "-"
+    
+    imp_cg = f"{(cg[2]-fc[2])/cg[2]*100:+.1f}%" if cg and fc else "-"
+    imp_sr = f"{(sr[2]-fs[2])/sr[2]*100:+.1f}%" if sr and fs else "-"
+    
+    print(f"  x{n:4d}     {cg_str:>8s}    {fc_str:>8s}   {imp_cg:>8s}  |  {sr_str:>8s}    {fs_str:>8s}   {imp_sr:>8s}")
+
+# 额外: 展示 FBP+SIRT 在 x50/x100 的性价比
+print("\n推荐配置 (性价比):")
+print(f"   最快:    FBP (FDK)   → {fbp_t*1000:.0f}ms, RMSE={fbp_rmse:.1f}")
+if any(h[0] == 30 for h in fbc_hist):
+    f30 = next(h for h in fbc_hist if h[0] == 30)
+    print(f"   均衡:    FBP+CGLS x30 → {f30[1]*1000:.0f}ms, RMSE={f30[2]:.1f}")
+if any(h[0] == 100 for h in fbs_hist):
+    f100 = next(h for h in fbs_hist if h[0] == 100)
+    print(f"   高质量:  FBP+SIRT x100 → {f100[1]*1000:.0f}ms, RMSE={f100[2]:.1f}")
+if any(h[0] == 200 for h in fbs_hist):
+    f200 = next(h for h in fbs_hist if h[0] == 200)
+    print(f"   最优:    FBP+SIRT x200 → {f200[1]*1000:.0f}ms, RMSE={f200[2]:.1f}")
 print("\n生成可视化...")
 os.makedirs("img_out", exist_ok=True)
 
@@ -307,7 +344,9 @@ plot_items = [('Ground Truth', ct, None, None, None),
 
 for i, (title, img, rmse, ssim, t) in enumerate(plot_items):
     ax = fig.add_subplot(gs[0, i])
-    ax.imshow(img, cmap=gray_cmap, vmin=-200, vmax=600)
+    # 应用软遮罩消除边缘条纹
+    img_display = img if rmse is not None else img
+    ax.imshow(img_display, cmap=gray_cmap, vmin=-200, vmax=600)
     tstr = title
     if rmse is not None:
         tstr += f"\nRMSE={rmse:.1f} SSIM={ssim:.4f}\n{t*1000:.0f}ms"
@@ -320,7 +359,7 @@ err_items = [('FBP Error', fbp_rec - ct),
              ('FBP+CGLS Error', best_fc['rec'] - ct),
              ('SIRT Error', best_sirt['rec'] - ct),
              ('FBP+SIRT Error', best_fs['rec'] - ct),
-             ('', ct - ct)]
+             ('', ct - ct)]  # 占位
 
 for i, (title, err_img) in enumerate(err_items):
     ax = fig.add_subplot(gs[1, i])
@@ -335,23 +374,23 @@ for i, (title, err_img) in enumerate(err_items):
 cax = fig.add_subplot(gs[1, 6])
 plt.colorbar(im, cax=cax)
 cax.set_ylabel('HU Error', fontsize=8)
-plt.suptitle('FBP + IR Hybrid Reconstruction (GPU: ASTRA CUDA)', fontsize=15, fontweight='bold', y=0.98)
-plt.savefig("img_out/fbp_plus_ir.png", dpi=150, bbox_inches='tight')
+plt.suptitle('FBP + IR Hybrid Reconstruction (GPU: TIGRE CUDA)', fontsize=15, fontweight='bold', y=0.98)
+plt.savefig("img_out/tigre_fbp_plus_ir.png", dpi=150, bbox_inches='tight')
 plt.close()
-print("   => img_out/fbp_plus_ir.png")
+print("   => img_out/tigre_fbp_plus_ir.png")
 
 # ============================================================
 # 保存总结
 # ============================================================
 summary = {
-    'backend': 'GPU (ASTRA CUDA)',
+    'backend': 'GPU (TIGRE CUDA)',
     'config': {'N': N, 'n_angles': n_angles},
     'results': {name: {'rmse': round(r, 2), 'ssim': round(s, 4), 'time_ms': round(t*1000, 1)}
                 for name, t, r, s, _ in results},
 }
-with open("img_out/fbp_plus_ir_summary.json", "w") as f:
+with open("img_out/tigre_fbp_plus_ir_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
-print("   => img_out/fbp_plus_ir_summary.json")
+print("   => img_out/tigre_fbp_plus_ir_summary.json")
 
 print("\n" + "=" * 60)
 print("Done!")
