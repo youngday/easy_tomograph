@@ -8,17 +8,22 @@
     "Pure FBP (shepp-logan)": {
       "rmse": 134.61,
       "ssim": 0.9918,
-      "time_ms": 20.5
+      "time_ms": 21.6
     },
     "FBP + SIRT (hybrid)": {
       "rmse": 125.45,
       "ssim": 0.9929,
-      "time_ms": 511.0
+      "time_ms": 546.4
     },
     "FBP + SART (hybrid)": {
       "rmse": 133.77,
       "ssim": 0.9919,
-      "time_ms": 18.4
+      "time_ms": 17.1
+    },
+    "FBP + OS-SART (hybrid)": {
+      "rmse": 126.57,
+      "ssim": 0.9928,
+      "time_ms": 243.9
     }
   }
 }

@@ -213,23 +213,83 @@ for n_iter in sart_iters:
 astra.data2d.delete(sid)
 print(f"   >> 最优: FBP+SART x{best_fsa['n']}: RMSE={best_fsa['rmse']:.2f}, SSIM={best_fsa['ssim']:.4f}, {best_fsa['t']*1000:.0f}ms")
 
+# ---- D. FBP + OS-SART (混合, 20 子集) ----
+print("-" * 55)
+print("D. FBP + OS-SART (20子集, FBP初始值)")
+print("-" * 55)
+print("   OS-SART = 360角度分20组, 每组18角度, 逐组SART更新")
+print("   收敛速度介乎 SIRT (全角同时) 和 SART (逐角) 之间")
+n_subsets = 20
+subset_size = n_angles // n_subsets  # = 18
+
+# 为每个子集创建独立的 sinogram 和投影几何
+subsets = []
+sid_list = []
+proj_geom_list = []
+for i in range(n_subsets):
+    idx = list(range(i * subset_size, (i + 1) * subset_size))
+    subsets.append(idx)
+    theta_sub = theta_rad[idx]
+    pg_sub = astra.create_proj_geom('parallel', 1.0, D, theta_sub)
+    proj_geom_list.append(pg_sub)
+    # 从完整 sinogram 中提取子集行
+    sino_sub = np.ascontiguousarray(sino[idx, :])
+    sid_sub = astra.data2d.create('-sino', pg_sub, sino_sub)
+    sid_list.append(sid_sub)
+
+fbs_os_hist = []
+best_fs_os = {'rmse': 1e9, 'ssim': -1, 'rec': None, 't': 0, 'n': 0}
+os_iters = [1, 2, 5, 10]  # 完整轮次 (每轮=20个子集)
+vol_os = rec_fbp.copy()
+prev_n = 0
+for n_iter in os_iters:
+    t0 = time()
+    for _ in range(n_iter - prev_n):
+        for i_sub in range(n_subsets):
+            rid_os = astra.data2d.create('-vol', vol_geom, data=vol_os.astype(np.float32))
+            cfg_os = astra.astra_dict('SART_CUDA')
+            cfg_os['ProjectionDataId'] = sid_list[i_sub]
+            cfg_os['ReconstructionDataId'] = rid_os
+            cfg_os['option'] = {'GPUindex': 0}
+            aid_os = astra.algorithm.create(cfg_os)
+            astra.algorithm.run(aid_os, 1)
+            vol_os = astra.data2d.get(rid_os).copy()
+            astra.algorithm.delete(aid_os)
+            astra.data2d.delete(rid_os)
+    t = time() - t0
+    rec = linear_scale(vol_os)
+    r, s = calc_rmse(rec), calc_ssim(rec)
+    fbs_os_hist.append((n_iter, t, r, s))
+    if r < best_fs_os['rmse']:
+        best_fs_os = {'rmse': r, 'ssim': s, 'rec': rec, 't': t, 'n': n_iter}
+    print(f"   x{n_iter:3d}轮 (x{n_iter*n_subsets:3d}子步): RMSE={r:.2f}, SSIM={s:.4f}, {t*1000:.0f}ms")
+    prev_n = n_iter
+# 清理子集数据
+for sid_sub in sid_list:
+    astra.data2d.delete(sid_sub)
+for pg_sub in proj_geom_list:
+    pass  # geometry objects don't need explicit deletion
+print(f"   >> 最优: FBP+OS-SART x{best_fs_os['n']}: RMSE={best_fs_os['rmse']:.2f}, SSIM={best_fs_os['ssim']:.4f}, {best_fs_os['t']*1000:.0f}ms")
+print("   注: OS-SART 每轮=20子集×1子步=20次SART子步")
+
 # ============================================================
-# D. FBP+SIRT vs FBP+SART 对比 (等迭代次数)
+# E. 混合方法对比 (SIRT vs SART vs OS-SART)
 # ============================================================
 print("\n" + "=" * 60)
-print("D. FBP+SIRT vs FBP+SART 对比")
+print("E. 混合方法对比 (FBP+SIRT vs FBP+SART vs FBP+OS-SART)")
 print("=" * 60)
-print(f"{'迭代数':>8s} {'FBP+SIRT':>12s} {'耗时':>10s} {'FBP+SART':>12s} {'耗时':>10s} {'速度比'}")
-print("-" * 60)
-for n in sorted(set([10, 20])):
+# 三方法等迭代对比 (取共同迭代数)
+print(f"{'轮次':>6s} {'FBP+SIRT':>14s} {'FBP+SART':>14s} {'FBP+OS-SART':>16s}")
+print(f"{'':>6s} {'RMSE/耗时':>14s} {'RMSE/耗时':>14s} {'RMSE/耗时':>16s}")
+print("-" * 55)
+for n in [10, 20]:
     fsr = next((h for h in fbs_hist if h[0] == n), None)
     fsa = next((h for h in fbsa_hist if h[0] == n), None)
-    fsr_r = f"{fsr[2]:.1f}" if fsr else "-"
-    fsr_t = f"{fsr[1]*1000:.0f}ms" if fsr else "-"
-    fsa_r = f"{fsa[2]:.1f}" if fsa else "-"
-    fsa_t = f"{fsa[1]*1000:.0f}ms" if fsa else "-"
-    ratio = f"{(fsr[1]/fsa[1]):.1f}x" if fsr and fsa else "-"
-    print(f"  x{n:4d}      {fsr_r:>8s}    {fsr_t:>8s}    {fsa_r:>8s}    {fsa_t:>8s}    {ratio}")
+    fso = next((h for h in fbs_os_hist if h[0] == n), None)
+    r1 = f"{fsr[2]:.1f}/{fsr[1]*1000:.0f}ms" if fsr else "-"
+    r2 = f"{fsa[2]:.1f}/{fsa[1]*1000:.0f}ms" if fsa else "-"
+    r3 = f"{fso[2]:.1f}/{fso[1]*1000:.0f}ms" if fso else "-"
+    print(f"  x{n:3d}    {r1:>14s}  {r2:>14s}  {r3:>16s}")
 
 # ============================================================
 # 结果列表
@@ -240,6 +300,8 @@ results = [
      (fbp_rmse - best_fs['rmse']) / fbp_rmse * 100),
     ('FBP + SART (hybrid)', best_fsa['t'], best_fsa['rmse'], best_fsa['ssim'],
      (fbp_rmse - best_fsa['rmse']) / fbp_rmse * 100),
+    ('FBP + OS-SART (hybrid)', best_fs_os['t'], best_fs_os['rmse'], best_fs_os['ssim'],
+     (fbp_rmse - best_fs_os['rmse']) / fbp_rmse * 100),
 ]
 
 # ============================================================
@@ -255,20 +317,23 @@ for name, t, r, s, imp in results:
     print(f"{name:35s} {t*1000:>8.0f} ms {r:>8.2f} {s:>8.4f} {imp_str:>10s}")
 
 print("\n推荐配置 (性价比):")
-print(f"   速度优先:    FBP (FDK)       → {fbp_t*1000:.0f}ms, RMSE={fbp_rmse:.1f}")
+print(f"   速度优先:    FBP (FDK)          → {fbp_t*1000:.0f}ms, RMSE={fbp_rmse:.1f}")
 if any(h[0] == 5 for h in fbsa_hist):
     fsa5 = next(h for h in fbsa_hist if h[0] == 5)
-    print(f"   产品级首选:  FBP+SART x5    → {fsa5[1]*1000:.0f}ms, RMSE={fsa5[2]:.1f}")
+    print(f"   产品级首选:  FBP+SART x5       → {fsa5[1]*1000:.0f}ms, RMSE={fsa5[2]:.1f}")
+if any(h[0] == 2 for h in fbs_os_hist):
+    fso2 = next(h for h in fbs_os_hist if h[0] == 2)
+    print(f"   均衡之选:    FBP+OS-SART x2    → {fso2[1]*1000:.0f}ms, RMSE={fso2[2]:.1f}")
 if any(h[0] == 10 for h in fbs_hist):
     f10_s = next(h for h in fbs_hist if h[0] == 10)
-    print(f"   高质量:      FBP+SIRT x10   → {f10_s[1]*1000:.0f}ms, RMSE={f10_s[2]:.1f}")
+    print(f"   高质量:      FBP+SIRT x10      → {f10_s[1]*1000:.0f}ms, RMSE={f10_s[2]:.1f}")
 
 print("\n生成可视化...")
 os.makedirs("img_out", exist_ok=True)
 
 fig = plt.figure(figsize=(16, 10))
-gs = GridSpec(2, 4, figure=fig, hspace=0.3, wspace=0.3,
-              width_ratios=[1, 1, 1, 1])
+gs = GridSpec(2, 5, figure=fig, hspace=0.3, wspace=0.3,
+              width_ratios=[1, 1, 1, 1, 1])
 
 gray_cmap = 'gray'
 err_cmap = 'RdBu_r'
@@ -277,7 +342,8 @@ err_cmap = 'RdBu_r'
 plot_items = [('Ground Truth', ct, None, None, None),
               ('Pure FBP', fbp_rec, fbp_rmse, fbp_ssim, fbp_t),
               ('FBP+SIRT (best)', best_fs['rec'], best_fs['rmse'], best_fs['ssim'], best_fs['t']),
-              ('FBP+SART (best)', best_fsa['rec'], best_fsa['rmse'], best_fsa['ssim'], best_fsa['t'])]
+              ('FBP+SART (best)', best_fsa['rec'], best_fsa['rmse'], best_fsa['ssim'], best_fsa['t']),
+              ('FBP+OS-SART (best)', best_fs_os['rec'], best_fs_os['rmse'], best_fs_os['ssim'], best_fs_os['t'])]
 
 for i, (title, img, rmse, ssim, t) in enumerate(plot_items):
     ax = fig.add_subplot(gs[0, i])
@@ -292,7 +358,8 @@ for i, (title, img, rmse, ssim, t) in enumerate(plot_items):
 err_items = [('', ct - ct),
              ('FBP Error', fbp_rec - ct),
              ('FBP+SIRT Error', best_fs['rec'] - ct),
-             ('FBP+SART Error', best_fsa['rec'] - ct)]
+             ('FBP+SART Error', best_fsa['rec'] - ct),
+             ('FBP+OS-SART Error', best_fs_os['rec'] - ct)]
 
 cax = None
 for i, (title, err_img) in enumerate(err_items):
