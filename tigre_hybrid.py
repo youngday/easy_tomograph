@@ -261,6 +261,66 @@ for n_iter in sirt_iters:
 print(f"   >> 最优: FBP+SIRT x{best_fs['n']}: RMSE={best_fs['rmse']:.2f}, SSIM={best_fs['ssim']:.4f}, {best_fs['t']*1000:.0f}ms")
 
 # ============================================================
+# F. 达标耗时对比 (达到目标 RMSE 所需迭代数 & 时间)
+# ============================================================
+print("\n" + "=" * 60)
+print("F. 达标耗时对比 (混合法 vs 纯 IR)")
+print("=" * 60)
+print("  说明: 混合法从 FBP 起步, 用更少迭代达到纯 IR 的最优 RMSE")
+
+def find_iters_to_target(target_rmse, hist):
+    for n_iter, t, r, s in hist:
+        if r <= target_rmse:
+            return n_iter, t, r
+    return None, None, None
+
+# CGLS 达标分析
+print("\n--- CGLS 达标分析 ---")
+cgls_target_r = best_cgls['rmse']
+print(f"目标 RMSE = Pure CGLS 最优 {cgls_target_r:.2f}")
+
+cgls_n, cgls_t, cgls_r = find_iters_to_target(cgls_target_r, cgls_hist)
+fc_n, fc_t, fc_r = find_iters_to_target(cgls_target_r, fbc_hist)
+
+if cgls_n:
+    print(f"  Pure CGLS:  x{cgls_n:3d} 达成  RMSE={cgls_r:.2f}  耗时 {cgls_t*1000:.0f}ms")
+if fc_n:
+    print(f"  FBP+CGLS:   x{fc_n:3d} 达成  RMSE={fc_r:.2f}  耗时 {fc_t*1000:.0f}ms")
+    if cgls_t and fc_t:
+        t_save = (cgls_t - fc_t) / cgls_t * 100
+        n_save = (cgls_n - fc_n) / cgls_n * 100
+        print(f"  -> 迭代节省: {n_save:.0f}%  时间节省: {t_save:.1f}%")
+
+if cgls_n is None and fc_n is not None:
+    print("  注: Pure CGLS 未收敛到自身最优, 改用 FBP RMSE 为目标")
+    cgls_target_r = fbp_rmse
+    fc_n, fc_t, fc_r = find_iters_to_target(cgls_target_r, fbc_hist)
+
+# SIRT 达标分析
+print("\n--- SIRT 达标分析 ---")
+sirt_target_r = best_sirt['rmse']
+print(f"目标 RMSE = Pure SIRT 最优 {sirt_target_r:.2f}")
+
+sirt_n, sirt_t, sirt_r = find_iters_to_target(sirt_target_r, sirt_hist)
+fs_n, fs_t, fs_r = find_iters_to_target(sirt_target_r, fbs_hist)
+
+if sirt_n:
+    print(f"  Pure SIRT:  x{sirt_n:4d} 达成  RMSE={sirt_r:.2f}  耗时 {sirt_t*1000:.0f}ms")
+if fs_n:
+    print(f"  FBP+SIRT:   x{fs_n:4d} 达成  RMSE={fs_r:.2f}  耗时 {fs_t*1000:.0f}ms")
+    if sirt_t and fs_t:
+        t_save = (sirt_t - fs_t) / sirt_t * 100
+        n_save = (sirt_n - fs_n) / sirt_n * 100
+        print(f"  -> 迭代节省: {n_save:.0f}%  时间节省: {t_save:.1f}%")
+
+if fs_n is None:
+    print("  FBP+SIRT 未在测试迭代范围内达到 Pure SIRT 最优, 改用 FBP RMSE 为目标")
+    fs_n, fs_t, fs_r = find_iters_to_target(fbp_rmse, fbs_hist)
+
+print("\n注意: TIGRE 的 CGLS warm-start 会丢失 Krylov 子空间(相当于 CG 重启), 时间节省有限。")
+print("      SIRT 无状态丢失, warm-start 更自然, 时间和质量优势更明显。")
+
+# ============================================================
 # 结果列表
 # ============================================================
 results = [
@@ -301,36 +361,29 @@ print("等迭代次数对比 (混合 vs 纯 IR)")
 print("=" * 60)
 print(f"{'迭代数':>8s} {'Pure CGLS':>12s} {'FBP+CGLS':>12s} {'改善':>10s}  |  {'Pure SIRT':>12s} {'FBP+SIRT':>12s} {'改善':>10s}")
 print("-" * 76)
-# 找共同迭代次数
 common_iters = set(cgls_iters) & set(sirt_iters)
 for n in sorted(common_iters):
     cg = next((h for h in cgls_hist if h[0] == n), None)
     fc = next((h for h in fbc_hist if h[0] == n), None)
     sr = next((h for h in sirt_hist if h[0] == n), None)
     fs = next((h for h in fbs_hist if h[0] == n), None)
-
     cg_str = f"{cg[2]:.1f}" if cg else "-"
     fc_str = f"{fc[2]:.1f}" if fc else "-"
     sr_str = f"{sr[2]:.1f}" if sr else "-"
     fs_str = f"{fs[2]:.1f}" if fs else "-"
-
     imp_cg = f"{(cg[2]-fc[2])/cg[2]*100:+.1f}%" if cg and fc else "-"
     imp_sr = f"{(sr[2]-fs[2])/sr[2]*100:+.1f}%" if sr and fs else "-"
-
     print(f"  x{n:4d}     {cg_str:>8s}    {fc_str:>8s}   {imp_cg:>8s}  |  {sr_str:>8s}    {fs_str:>8s}   {imp_sr:>8s}")
 
-# 额外: 展示 FBP+SIRT 在 x50/x100 的性价比
+# 推荐配置
 print("\n推荐配置 (性价比):")
-print(f"   最快:    FBP (FDK)   → {fbp_t*1000:.0f}ms, RMSE={fbp_rmse:.1f}")
+print(f"   最快:    FBP (FDK)     → {fbp_t*1000:.0f}ms, RMSE={fbp_rmse:.1f}")
 if any(h[0] == 30 for h in fbc_hist):
     f30 = next(h for h in fbc_hist if h[0] == 30)
-    print(f"   均衡:    FBP+CGLS x30 → {f30[1]*1000:.0f}ms, RMSE={f30[2]:.1f}")
+    print(f"   均衡:    FBP+CGLS x30  → {f30[1]*1000:.0f}ms, RMSE={f30[2]:.1f}")
 if any(h[0] == 100 for h in fbs_hist):
     f100 = next(h for h in fbs_hist if h[0] == 100)
     print(f"   高质量:  FBP+SIRT x100 → {f100[1]*1000:.0f}ms, RMSE={f100[2]:.1f}")
-if any(h[0] == 200 for h in fbs_hist):
-    f200 = next(h for h in fbs_hist if h[0] == 200)
-    print(f"   最优:    FBP+SIRT x200 → {f200[1]*1000:.0f}ms, RMSE={f200[2]:.1f}")
 print("\n生成可视化...")
 os.makedirs("img_out", exist_ok=True)
 
@@ -382,9 +435,9 @@ cax = fig.add_subplot(gs[1, 6])
 plt.colorbar(im, cax=cax)
 cax.set_ylabel('HU Error', fontsize=8)
 plt.suptitle('FBP + IR Hybrid Reconstruction (GPU: TIGRE CUDA)', fontsize=15, fontweight='bold', y=0.98)
-plt.savefig("img_out/tigre_fbp_plus_ir.png", dpi=150, bbox_inches='tight')
+plt.savefig("img_out/tigre_hybrid.png", dpi=150, bbox_inches='tight')
 plt.close()
-print("   => img_out/tigre_fbp_plus_ir.png")
+print("   => img_out/tigre_hybrid.png")
 
 # ============================================================
 # 保存总结
@@ -395,9 +448,9 @@ summary = {
     'results': {name: {'rmse': round(r, 2), 'ssim': round(s, 4), 'time_ms': round(t*1000, 1)}
                 for name, t, r, s, _ in results},
 }
-with open("img_out/tigre_fbp_plus_ir_summary.json", "w") as f:
+with open("img_out/tigre_hybrid_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
-print("   => img_out/tigre_fbp_plus_ir_summary.json")
+print("   => img_out/tigre_hybrid_summary.json")
 
 print("\n" + "=" * 60)
 print("Done!")

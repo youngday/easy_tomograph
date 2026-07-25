@@ -18,7 +18,6 @@ FBP + IR 混合重建
 
 import numpy as np
 from time import time
-from skimage.transform import radon
 import tomophantom
 from tomophantom import TomoP2D
 import matplotlib.pyplot as plt
@@ -64,11 +63,32 @@ circ_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= head_r ** 2
 ct[~circ_mask] = -1000
 
 # ============================================================
-# 2. 正向投影
+# 2. 正向投影 (ASTRA GPU FP 算法, 与重建算子完全匹配)
 # ============================================================
+# 之前: skimage.transform.radon → ASTRA 重建, 算子不匹配导致精度天花板
+# 现在: ASTRA FP algorithm → ASTRA 重建, 算子完全匹配
 theta_deg = np.linspace(0, 180, n_angles, endpoint=False)
-sino = radon(ct, theta=theta_deg, circle=False)
-D = sino.shape[0]
+theta_rad = np.deg2rad(theta_deg).astype(np.float32)
+D = int(np.ceil(N * np.sqrt(2)))
+proj_geom = astra.create_proj_geom('parallel', 1.0, D, theta_rad)
+vol_geom = astra.create_vol_geom(N, N)
+
+# GPU 前向投影 (使用 ASTRA FP 算法, 与重建使用相同的几何)
+ct_32f = np.ascontiguousarray(ct.astype(np.float32))
+vol_id = astra.data2d.create('-vol', vol_geom, ct_32f)
+sino_id = astra.data2d.create('-sino', proj_geom, 0.0)
+cfg = astra.astra_dict('FP_CUDA')
+cfg['ProjectionDataId'] = sino_id
+cfg['VolumeDataId'] = vol_id
+cfg['option'] = {'GPUindex': 0}
+alg_id = astra.algorithm.create(cfg)
+astra.algorithm.run(alg_id)
+sino = astra.data2d.get(sino_id)  # (n_angles, D)
+print(f"   前向投影: 形状 {sino.shape}, D={D}")
+# 清理
+astra.algorithm.delete(alg_id)
+astra.data2d.delete(sino_id)
+astra.data2d.delete(vol_id)
 
 # ============================================================
 # 辅助函数
@@ -94,29 +114,22 @@ def calc_ssim(rec):
            ((mu_x ** 2 + mu_y ** 2 + c1) * (sig_x + sig_y + c2))
 
 # ============================================================
-# GPU 路径 (ASTRA)
-# ============================================================
-# 同一几何坐标系
-theta_rad = np.deg2rad(theta_deg).astype(np.float32)
-proj_geom = astra.create_proj_geom('parallel', 1.0, D, theta_rad)
-vol_geom = astra.create_vol_geom(N, N)
-
 # GPU 预热
+# ============================================================
 print("GPU 预热...")
-sino = np.ascontiguousarray(sino.T)
-sid = astra.data2d.create('-sino', proj_geom, sino)
-rid = astra.data2d.create('-vol', vol_geom)
+sid_warm = astra.data2d.create('-sino', proj_geom, sino)
+rid_warm = astra.data2d.create('-vol', vol_geom)
 for algo in ['FBP_CUDA', 'CGLS_CUDA']:
     cfg = astra.astra_dict(algo)
-    cfg['ProjectionDataId'] = sid
-    cfg['ReconstructionDataId'] = rid
+    cfg['ProjectionDataId'] = sid_warm
+    cfg['ReconstructionDataId'] = rid_warm
     if algo == 'CGLS_CUDA':
         cfg['option'] = {'GPUindex': 0}
     aid = astra.algorithm.create(cfg)
     astra.algorithm.run(aid, 1)
     astra.algorithm.delete(aid)
-astra.data2d.delete(rid)
-astra.data2d.delete(sid)
+astra.data2d.delete(rid_warm)
+astra.data2d.delete(sid_warm)
 print("   预热完成\n")
 
 # ---- A. Pure FBP (基线) ----
@@ -258,7 +271,58 @@ for n_iter in sirt_iters:
 astra.data2d.delete(sid)
 print(f"   >> 最优: FBP+SIRT x{best_fs['n']}: RMSE={best_fs['rmse']:.2f}, SSIM={best_fs['ssim']:.4f}, {best_fs['t']*1000:.0f}ms")
 
+# ============================================================
+# F. 达标耗时对比 (达到目标 RMSE 所需迭代数 & 时间)
+# ============================================================
+print("\n" + "=" * 60)
+print("F. 达标耗时对比 (混合法 vs 纯 IR)")
+print("=" * 60)
+print("  说明: 混合法从 FBP 起步, 用更少迭代达到纯 IR 的最优 RMSE")
+
+def find_iters_to_target(target_rmse, hist):
+    """找到达到目标 RMSE 的最小累积迭代数和对应时间"""
+    for n_iter, t, r, s in hist:
+        if r <= target_rmse:
+            return n_iter, t, r
+    return None, None, None
+
+# CGLS 达标分析
+print("\n--- CGLS 达标分析 ---")
+cgls_target_r = best_cgls['rmse']
+print(f"目标 RMSE = Pure CGLS 最优 {cgls_target_r:.2f}")
+
+cgls_n, cgls_t, cgls_r = find_iters_to_target(cgls_target_r, cgls_hist)
+fc_n, fc_t, fc_r = find_iters_to_target(cgls_target_r, fbc_hist)
+
+if cgls_n:
+    print(f"  Pure CGLS:  x{cgls_n:3d} 达成  RMSE={cgls_r:.2f}  耗时 {cgls_t*1000:.0f}ms")
+if fc_n:
+    print(f"  FBP+CGLS:   x{fc_n:3d} 达成  RMSE={fc_r:.2f}  耗时 {fc_t*1000:.0f}ms")
+    if cgls_t and fc_t:
+        t_save = (cgls_t - fc_t) / cgls_t * 100
+        n_save = (cgls_n - fc_n) / cgls_n * 100
+        print(f"  -> 迭代节省: {n_save:.0f}%  时间节省: {t_save:.1f}%")
+
+# SIRT 达标分析
+print("\n--- SIRT 达标分析 ---")
+sirt_target_r = best_sirt['rmse']
+print(f"目标 RMSE = Pure SIRT 最优 {sirt_target_r:.2f}")
+
+sirt_n, sirt_t, sirt_r = find_iters_to_target(sirt_target_r, sirt_hist)
+fs_n, fs_t, fs_r = find_iters_to_target(sirt_target_r, fbs_hist)
+
+if sirt_n:
+    print(f"  Pure SIRT:  x{sirt_n:4d} 达成  RMSE={sirt_r:.2f}  耗时 {sirt_t*1000:.0f}ms")
+if fs_n:
+    print(f"  FBP+SIRT:   x{fs_n:4d} 达成  RMSE={fs_r:.2f}  耗时 {fs_t*1000:.0f}ms")
+    if sirt_t and fs_t:
+        t_save = (sirt_t - fs_t) / sirt_t * 100
+        n_save = (sirt_n - fs_n) / sirt_n * 100
+        print(f"  -> 迭代节省: {n_save:.0f}%  时间节省: {t_save:.1f}%")
+
+# ============================================================
 # 结果列表
+# ============================================================
 results = [
     ('Pure FBP (shepp-logan)', fbp_t, fbp_rmse, fbp_ssim, 0),
     ('Pure CGLS (from zero)', best_cgls['t'], best_cgls['rmse'], best_cgls['ssim'],

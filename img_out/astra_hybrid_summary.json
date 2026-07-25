@@ -6,29 +6,29 @@
   },
   "results": {
     "Pure FBP (shepp-logan)": {
-      "rmse": 216.36,
-      "ssim": 0.9786,
-      "time_ms": 20.4
+      "rmse": 134.61,
+      "ssim": 0.9918,
+      "time_ms": 21.8
     },
     "Pure CGLS (from zero)": {
-      "rmse": 217.55,
-      "ssim": 0.9784,
-      "time_ms": 71.3
+      "rmse": 112.28,
+      "ssim": 0.9943,
+      "time_ms": 153.5
     },
     "FBP + CGLS (hybrid)": {
-      "rmse": 215.99,
-      "ssim": 0.9787,
-      "time_ms": 21.4
+      "rmse": 110.73,
+      "ssim": 0.9945,
+      "time_ms": 144.7
     },
     "Pure SIRT (from zero)": {
-      "rmse": 240.62,
-      "ssim": 0.9735,
-      "time_ms": 480.7
+      "rmse": 200.03,
+      "ssim": 0.9818,
+      "time_ms": 533.0
     },
     "FBP + SIRT (hybrid)": {
-      "rmse": 215.94,
-      "ssim": 0.9787,
-      "time_ms": 246.1
+      "rmse": 125.45,
+      "ssim": 0.9929,
+      "time_ms": 495.2
     }
   }
 }
