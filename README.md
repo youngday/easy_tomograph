@@ -15,13 +15,17 @@ conda with cupy (uv not ok ,for cuda and other),todo:uv
 ### fbp_vs_ir.py 
 
 * fbp filters
-![alt text](img_out/fbp_group.png)
-* ![alt text](img_out/gpu_ir_group.png)
+![alt text](img_out/group_fbp.png)
+* ![alt text](img_out/group_ir.png)
 fbp vs ir 
 ### fbp_plus_ir.py
 fbp first and then to ir 
 ![alt text](img_out/fbp_plus_ir.png)
+### tigre_plus_ir.py
+
+![alt text](img_out/tigre_fbp_plus_ir.png)
 
 ## install
 
-![install_by_uv](install_by_uv.md)
+note:tigre and tomophantom need install by github path
+[install_by_uv](install_by_uv.md)
