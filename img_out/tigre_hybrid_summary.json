@@ -8,27 +8,12 @@
     "Pure FBP (shepp_logan)": {
       "rmse": 131.19,
       "ssim": 0.9923,
-      "time_ms": 40.3
-    },
-    "Pure CGLS (from zero)": {
-      "rmse": 120.77,
-      "ssim": 0.9934,
-      "time_ms": 3269.1
-    },
-    "FBP + CGLS (hybrid)": {
-      "rmse": 92.0,
-      "ssim": 0.9962,
-      "time_ms": 3321.4
-    },
-    "Pure SIRT (from zero)": {
-      "rmse": 195.59,
-      "ssim": 0.9826,
-      "time_ms": 8471.7
+      "time_ms": 37.5
     },
     "FBP + SIRT (hybrid)": {
       "rmse": 110.98,
       "ssim": 0.9945,
-      "time_ms": 8535.3
+      "time_ms": 7742.4
     }
   }
 }
