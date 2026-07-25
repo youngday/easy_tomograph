@@ -21,6 +21,7 @@ fbp vs ir
 ### fbp_plus_ir.py
 fbp first and then to ir 
 ![alt text](img_out/fbp_plus_ir.png)
-### install and start
 
-just some install step ,todo:more steps.
+## install
+
+![install_by_uv](install_by_uv.md)

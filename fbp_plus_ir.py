@@ -21,10 +21,11 @@ FBP + IR 混合重建
 
 import numpy as np
 from time import time
-from skimage.data import shepp_logan_phantom
-from skimage.transform import radon, resize
+from skimage.transform import radon
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
+plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
 import os, json
 
 # ============================================================
@@ -51,13 +52,39 @@ n_angles = 360
 print(f"体模: {N}x{N}, 角度: {n_angles}")
 
 # ============================================================
-# 1. 生成体模
+# 1. 生成体模 (自定义头部横断面, 12种组织, 与 TIGRE 版一致)
 # ============================================================
-np.random.seed(42)
-p = resize(shepp_logan_phantom(), (N, N), anti_aliasing=True)
-ct = p * 2000 - 1000  # 缩放到近似 HU 值
+def _add_ellipse(img, cx, cy, rx, ry, angle, value):
+    cos_a = np.cos(np.deg2rad(angle))
+    sin_a = np.sin(np.deg2rad(angle))
+    xr = (X - cx) * cos_a + (Y - cy) * sin_a
+    yr = -(X - cx) * sin_a + (Y - cy) * cos_a
+    img[(xr / rx)**2 + (yr / ry)**2 <= 1] = value
+
 Y, X = np.ogrid[:N, :N]
-circ_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= (N / 2 * 0.95) ** 2
+ct = np.full((N, N), -1000, dtype=np.float32)
+_add_ellipse(ct, 256, 256, 210, 170, 0, 50)   # 头皮
+_add_ellipse(ct, 256, 256, 185, 150, 0, 800)  # 颅骨外板
+_add_ellipse(ct, 256, 256, 175, 142, 0, 300)  # 颅骨内板
+_add_ellipse(ct, 256, 256, 160, 130, 0, 35)   # 灰质
+_add_ellipse(ct, 256, 246, 110, 90, 0, 28)    # 白质
+_add_ellipse(ct, 260, 270, 90, 80, 0, 28)
+_add_ellipse(ct, 240, 235, 30, 18, -15, 5)    # 侧脑室
+_add_ellipse(ct, 272, 235, 30, 18, 15, 5)
+_add_ellipse(ct, 256, 220, 12, 6, 0, 5)       # 第三脑室
+_add_ellipse(ct, 245, 230, 12, 10, 0, 38)      # 丘脑
+_add_ellipse(ct, 267, 230, 12, 10, 0, 38)
+_add_ellipse(ct, 235, 420, 22, 22, 0, 20)      # 眼球
+_add_ellipse(ct, 277, 420, 22, 22, 0, 20)
+_add_ellipse(ct, 235, 410, 8, 4, 0, 120)      # 晶状体
+_add_ellipse(ct, 277, 410, 8, 4, 0, 120)
+_add_ellipse(ct, 256, 370, 18, 8, 0, -1000)    # 鼻腔
+_add_ellipse(ct, 256, 340, 15, 5, 0, -800)     # 额窦
+_add_ellipse(ct, 210, 210, 10, 8, 30, 50)      # 小肿瘤
+_add_ellipse(ct, 250, 260, 3, 3, 0, 400)       # 钙化点
+
+head_r = 215
+circ_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= head_r ** 2
 ct[~circ_mask] = -1000
 
 # ============================================================
@@ -71,8 +98,10 @@ D = sino.shape[0]
 # 辅助函数
 # ============================================================
 def linear_scale(rec):
-    mask = circ_mask & (np.abs(rec) < 2000)
-    A = np.column_stack([rec.ravel()[mask.ravel()], np.ones(mask.sum())])
+    # 先裁剪极端值, 再用全圆形遮罩做线性拟合
+    rec_clip = np.clip(rec, -5000, 5000)
+    mask = circ_mask
+    A = np.column_stack([rec_clip.ravel()[mask.ravel()], np.ones(mask.sum())])
     b = ct.ravel()[mask.ravel()]
     coef, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
     return rec * coef[0] + coef[1]
@@ -285,8 +314,38 @@ print(f"   FBP+CGLS vs Pure CGLS: RMSE {'降低' if fc_imp>=0 else '升高'} {ab
 print(f"   FBP+SIRT vs Pure SIRT: RMSE {'降低' if fs_imp>=0 else '升高'} {abs(fs_imp):+.1f}%")
 
 # ============================================================
-# 可视化
+# 等迭代次数对比 (混合 vs 纯 IR)
 # ============================================================
+print("\n" + "=" * 60)
+print("等迭代次数对比 (混合 vs 纯 IR)")
+print("=" * 60)
+print(f"{'迭代数':>8s} {'Pure CGLS':>12s} {'FBP+CGLS':>12s} {'改善':>10s}  |  {'Pure SIRT':>12s} {'FBP+SIRT':>12s} {'改善':>10s}")
+print("-" * 76)
+common_iters = sorted(set(cgls_iters) & set(sirt_iters))
+for n in common_iters:
+    cg = next((h for h in cgls_hist if h[0] == n), None)
+    fc = next((h for h in fbc_hist if h[0] == n), None)
+    sr = next((h for h in sirt_hist if h[0] == n), None)
+    fs = next((h for h in fbs_hist if h[0] == n), None)
+    cg_str = f"{cg[2]:.1f}" if cg else "-"
+    fc_str = f"{fc[2]:.1f}" if fc else "-"
+    sr_str = f"{sr[2]:.1f}" if sr else "-"
+    fs_str = f"{fs[2]:.1f}" if fs else "-"
+    imp_cg = f"{(cg[2]-fc[2])/cg[2]*100:+.1f}%" if cg and fc else "-"
+    imp_sr = f"{(sr[2]-fs[2])/sr[2]*100:+.1f}%" if sr and fs else "-"
+    print(f"  x{n:4d}     {cg_str:>8s}    {fc_str:>8s}   {imp_cg:>8s}  |  {sr_str:>8s}    {fs_str:>8s}   {imp_sr:>8s}")
+
+print("\n推荐配置 (性价比):")
+print(f"   最快:    FBP (FDK)   → {fbp_t*1000:.0f}ms, RMSE={fbp_rmse:.1f}")
+if any(h[0] == 30 for h in fbc_hist):
+    f30 = next(h for h in fbc_hist if h[0] == 30)
+    print(f"   均衡:    FBP+CGLS x30 → {f30[1]*1000:.0f}ms, RMSE={f30[2]:.1f}")
+if any(h[0] == 100 for h in fbs_hist):
+    f100 = next(h for h in fbs_hist if h[0] == 100)
+    print(f"   高质量:  FBP+SIRT x100 → {f100[1]*1000:.0f}ms, RMSE={f100[2]:.1f}")
+if any(h[0] == 200 for h in fbs_hist):
+    f200 = next(h for h in fbs_hist if h[0] == 200)
+    print(f"   最优:    FBP+SIRT x200 → {f200[1]*1000:.0f}ms, RMSE={f200[2]:.1f}")
 print("\n生成可视化...")
 os.makedirs("img_out", exist_ok=True)
 
@@ -315,12 +374,12 @@ for i, (title, img, rmse, ssim, t) in enumerate(plot_items):
     ax.axis('off')
 
 # 第2行: 误差图
-err_items = [('FBP Error', fbp_rec - ct),
+err_items = [('', ct - ct),              # GT 无误差
+             ('FBP Error', fbp_rec - ct),
              ('CGLS Error', best_cgls['rec'] - ct),
              ('FBP+CGLS Error', best_fc['rec'] - ct),
              ('SIRT Error', best_sirt['rec'] - ct),
-             ('FBP+SIRT Error', best_fs['rec'] - ct),
-             ('', ct - ct)]
+             ('FBP+SIRT Error', best_fs['rec'] - ct)]
 
 for i, (title, err_img) in enumerate(err_items):
     ax = fig.add_subplot(gs[1, i])

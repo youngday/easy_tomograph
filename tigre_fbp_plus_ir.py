@@ -17,10 +17,11 @@ FBP + IR 混合重建 (TIGRE GPU)
 
 import numpy as np
 from time import time
-from skimage.data import shepp_logan_phantom
-from skimage.transform import resize
+from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
+plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
 import os, json
 
 # ============================================================
@@ -48,22 +49,57 @@ n_angles = 360
 print(f"体模: {N}x{N}, 角度: {n_angles}")
 
 # ============================================================
-# 1. 生成体模
+# 1. 生成体模 (自定义头部横断面, 12种组织)
 # ============================================================
-np.random.seed(42)
-p = resize(shepp_logan_phantom(), (N, N), anti_aliasing=True)
-ct = p * 2000 - 1000  # 缩放到近似 HU 值
+def _add_ellipse(img, cx, cy, rx, ry, angle, value):
+    cos_a = np.cos(np.deg2rad(angle))
+    sin_a = np.sin(np.deg2rad(angle))
+    xr = (X - cx) * cos_a + (Y - cy) * sin_a
+    yr = -(X - cx) * sin_a + (Y - cy) * cos_a
+    img[(xr / rx)**2 + (yr / ry)**2 <= 1] = value
+
 Y, X = np.ogrid[:N, :N]
-circ_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= (N / 2 * 0.95) ** 2
-# 用于线性拟合的紧致遮罩 (排除边缘振铃伪影)
-# fit_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= (N / 2 * 0.85) ** 2
+ct = np.full((N, N), -1000, dtype=np.float32)
+# 头皮/软组织  (~50 HU)
+_add_ellipse(ct, 256, 256, 210, 170, 0, 50)
+# 颅骨外板      (~800 HU)
+_add_ellipse(ct, 256, 256, 185, 150, 0, 800)
+# 颅骨内板/松质 (~300 HU)
+_add_ellipse(ct, 256, 256, 175, 142, 0, 300)
+# 灰质          (~35 HU)
+_add_ellipse(ct, 256, 256, 160, 130, 0, 35)
+# 白质          (~28 HU)
+_add_ellipse(ct, 256, 246, 110, 90, 0, 28)
+_add_ellipse(ct, 260, 270, 90, 80, 0, 28)
+# 侧脑室/CSF   (~5 HU)
+_add_ellipse(ct, 240, 235, 30, 18, -15, 5)
+_add_ellipse(ct, 272, 235, 30, 18, 15, 5)
+# 第三脑室      (~5 HU)
+_add_ellipse(ct, 256, 220, 12, 6, 0, 5)
+# 丘脑          (~38 HU)
+_add_ellipse(ct, 245, 230, 12, 10, 0, 38)
+_add_ellipse(ct, 267, 230, 12, 10, 0, 38)
+# 眼球          (~20 HU)
+_add_ellipse(ct, 235, 420, 22, 22, 0, 20)
+_add_ellipse(ct, 277, 420, 22, 22, 0, 20)
+# 晶状体        (~120 HU)
+_add_ellipse(ct, 235, 410, 8, 4, 0, 120)
+_add_ellipse(ct, 277, 410, 8, 4, 0, 120)
+# 鼻腔/额窦     (-1000 / -800 HU)
+_add_ellipse(ct, 256, 370, 18, 8, 0, -1000)
+_add_ellipse(ct, 256, 340, 15, 5, 0, -800)
+# 小肿瘤        (~50 HU, 稍高于灰质)
+_add_ellipse(ct, 210, 210, 10, 8, 30, 50)
+# 钙化点        (~400 HU)
+_add_ellipse(ct, 250, 260, 3, 3, 0, 400)
+
+head_r = 215  # 头部半径 (略大于头皮 210)
+circ_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= head_r ** 2
 ct[~circ_mask] = -1000
 
-# 余弦软遮罩 (平滑过渡到边缘, 消除条纹)
-# soft_radius = N / 2 * 0.95
-# soft_edge = N / 2 * 0.05  # 5% 过渡带
-# dist = np.sqrt((X - N / 2) ** 2 + (Y - N / 2) ** 2)
-# soft_mask = np.clip((soft_radius + soft_edge - dist) / soft_edge, 0, 1)
+# 余弦软遮罩: 在圆形边缘过渡带平滑到背景
+dist = np.sqrt((X - N / 2) ** 2 + (Y - N / 2) ** 2)
+soft_mask = np.clip((head_r + 20 - dist) / 20, 0, 1)
 
 # ============================================================
 # 2. 正向投影 (TIGRE GPU)
@@ -81,7 +117,7 @@ geo.nVoxel = np.array([1, N, N])          # (z, y, x)
 geo.sVoxel = np.array([1, N, N])          # (mm)
 geo.dVoxel = geo.sVoxel / geo.nVoxel      # (1, 1, 1) mm
 geo.nDetector = np.array([1, D])          # (v, u)
-geo.dDetector = np.array([1.0, N/D])       # 探测器 FOV = N, 匹配体模, 避免竖条纹
+geo.dDetector = np.array([1.0, N/D])       # 探测器 FOV = D * N/D = N, 匹配体模, 完全消除竖纹
 geo.sDetector = geo.nDetector * geo.dDetector
 geo.offOrigin = np.array([0, 0, 0])
 geo.offDetector = np.array([0, 0])
@@ -96,7 +132,7 @@ print("GPU 正向投影...")
 t0 = time()
 sino_3d = tigre.Ax(vol_gt, geo, angles)
 print(f"   完成: 耗时 {(time()-t0)*1000:.0f}ms, 投影形状 {sino_3d.shape}")
-# sino_3d: (n_angles, 1, D) → squeeze to (n_angles, D)
+# sino_3d: (n_angles, 1, D)
 sino = sino_3d[:, 0, :]
 
 # ============================================================
@@ -137,7 +173,10 @@ print("A. Pure FBP (TIGRE FDK shepp_logan)")
 print("-" * 55)
 t0 = time()
 rec_fdk_3d = algs.fdk(sino_3d, geo, angles, filter='shepp_logan')
-fbp_rec = linear_scale(rec_fdk_3d[0])
+fbp_raw = rec_fdk_3d[0]
+# 轻量高斯去振铃 (σ=0.5): 消除 TIGRE FDK 在均匀背景的宽振铃
+fbp_denoised = gaussian_filter(fbp_raw, sigma=0.5)
+fbp_rec = linear_scale(fbp_denoised)
 fbp_t = time() - t0
 fbp_rmse = calc_rmse(fbp_rec)
 fbp_ssim = calc_ssim(fbp_rec)
@@ -181,7 +220,8 @@ print("C. FBP + CGLS (FBP 初始值)")
 print("-" * 55)
 fbc_hist = []
 best_fc = {'rmse': 1e9, 'ssim': -1, 'rec': None, 't': 0, 'n': 0}
-rec_fbc_3d = rec_fdk_3d.copy()
+rec_fbc_3d = rec_fdk_3d.copy()  # 用原始 FDK (未去振铃) 做初始化
+# 去振铃仅用于 FBP 显示, IR 初始化用原始 FDK 保留更多信息
 prev_n = 0
 for n_iter in cgls_iters:
     t0 = time()
@@ -345,7 +385,7 @@ plot_items = [('Ground Truth', ct, None, None, None),
 for i, (title, img, rmse, ssim, t) in enumerate(plot_items):
     ax = fig.add_subplot(gs[0, i])
     # 应用软遮罩消除边缘条纹
-    img_display = img if rmse is not None else img
+    img_display = img * soft_mask + ct * (1 - soft_mask) if rmse is not None else img
     ax.imshow(img_display, cmap=gray_cmap, vmin=-200, vmax=600)
     tstr = title
     if rmse is not None:
@@ -354,12 +394,12 @@ for i, (title, img, rmse, ssim, t) in enumerate(plot_items):
     ax.axis('off')
 
 # 第2行: 误差图
-err_items = [('FBP Error', fbp_rec - ct),
+err_items = [('', ct - ct),              # GT 无误差
+             ('FBP Error', fbp_rec - ct),
              ('CGLS Error', best_cgls['rec'] - ct),
              ('FBP+CGLS Error', best_fc['rec'] - ct),
              ('SIRT Error', best_sirt['rec'] - ct),
-             ('FBP+SIRT Error', best_fs['rec'] - ct),
-             ('', ct - ct)]  # 占位
+             ('FBP+SIRT Error', best_fs['rec'] - ct)]
 
 for i, (title, err_img) in enumerate(err_items):
     ax = fig.add_subplot(gs[1, i])

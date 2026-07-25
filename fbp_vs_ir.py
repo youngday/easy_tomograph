@@ -7,20 +7,50 @@ IR 组:  CGLS (最优迭代)
 
 import numpy as np
 from time import time
-from skimage.data import shepp_logan_phantom
-from skimage.transform import radon, resize
+from skimage.transform import radon
 
 import astra
 import matplotlib.pyplot as plt
+plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import os
 
 N = 512; n_angles = 360
 print(f"体模: {N}x{N}, 角度: {n_angles}")
-p = resize(shepp_logan_phantom(), (N, N), anti_aliasing=True)
-ct = p * 2000 - 1000
+
+# 自定义头部体模 (12种组织, 同 fbp_plus_ir.py)
+def _add_ellipse(img, cx, cy, rx, ry, angle, value):
+    cos_a = np.cos(np.deg2rad(angle))
+    sin_a = np.sin(np.deg2rad(angle))
+    xr = (X - cx) * cos_a + (Y - cy) * sin_a
+    yr = -(X - cx) * sin_a + (Y - cy) * cos_a
+    img[(xr / rx)**2 + (yr / ry)**2 <= 1] = value
+
 Y, X = np.ogrid[:N, :N]
-circ_mask = (X - N/2)**2 + (Y - N/2)**2 <= (N/2 * 0.95)**2
+ct = np.full((N, N), -1000, dtype=np.float32)
+_add_ellipse(ct, 256, 256, 210, 170, 0, 50)
+_add_ellipse(ct, 256, 256, 185, 150, 0, 800)
+_add_ellipse(ct, 256, 256, 175, 142, 0, 300)
+_add_ellipse(ct, 256, 256, 160, 130, 0, 35)
+_add_ellipse(ct, 256, 246, 110, 90, 0, 28)
+_add_ellipse(ct, 260, 270, 90, 80, 0, 28)
+_add_ellipse(ct, 240, 235, 30, 18, -15, 5)
+_add_ellipse(ct, 272, 235, 30, 18, 15, 5)
+_add_ellipse(ct, 256, 220, 12, 6, 0, 5)
+_add_ellipse(ct, 245, 230, 12, 10, 0, 38)
+_add_ellipse(ct, 267, 230, 12, 10, 0, 38)
+_add_ellipse(ct, 235, 420, 22, 22, 0, 20)
+_add_ellipse(ct, 277, 420, 22, 22, 0, 20)
+_add_ellipse(ct, 235, 410, 8, 4, 0, 120)
+_add_ellipse(ct, 277, 410, 8, 4, 0, 120)
+_add_ellipse(ct, 256, 370, 18, 8, 0, -1000)
+_add_ellipse(ct, 256, 340, 15, 5, 0, -800)
+_add_ellipse(ct, 210, 210, 10, 8, 30, 50)
+_add_ellipse(ct, 250, 260, 3, 3, 0, 400)
+head_r = 215
+circ_mask = (X - N/2)**2 + (Y - N/2)**2 <= head_r**2
 ct[~circ_mask] = -1000
 
 theta_deg = np.linspace(0, 180, n_angles, endpoint=False)
@@ -32,8 +62,9 @@ proj_geom = astra.create_proj_geom('parallel', 1.0, D, theta_rad)
 vol_geom = astra.create_vol_geom(N, N)
 
 def linear_scale(rec):
-    mask = circ_mask & (np.abs(rec) < 2000)
-    A = np.column_stack([rec.ravel()[mask.ravel()], np.ones(mask.sum())])
+    rec_clip = np.clip(rec, -5000, 5000)
+    mask = circ_mask
+    A = np.column_stack([rec_clip.ravel()[mask.ravel()], np.ones(mask.sum())])
     b = ct.ravel()[mask.ravel()]
     coef, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
     return rec * coef[0] + coef[1]
@@ -151,6 +182,7 @@ for name, t, r, _ in results:
 
 # ========== Plotly 可视化 ==========
 print("\n生成图表...")
+os.makedirs("img_out", exist_ok=True)
 
 gray_scale = [[0, 'rgb(0,0,0)'], [1, 'rgb(255,255,255)']]
 rdbu_scale = [[0, 'rgb(103,0,31)'], [0.5, 'rgb(255,255,255)'], [1, 'rgb(0,0,100)']]
@@ -176,8 +208,8 @@ for i in range(n_fbp):
 
 fig1.update_layout(title=dict(text=f'GPU FBP Group - {N}x{N} / {n_angles} angles', y=0.95, automargin=True),
     height=750, width=280*n_fbp, showlegend=False, margin=dict(t=120, b=40))
-fig1.write_html("img_out/fbp_group.html")
-print(f"   ✅ fbp_group.html")
+fig1.write_html("img_out/group_fbp.html")
+print(f"   ✅ group_fbp.html")
 
 # matplotlib 快速出 PNG
 fig1_mpl, axes1 = plt.subplots(2, n_fbp, figsize=(4*n_fbp, 8))
@@ -193,9 +225,9 @@ for i in range(n_fbp):
     axes1[0, i].set_title(f"{name}\nRMSE={r:.1f}\n{t*1000:.0f}ms", fontsize=9)
 fig1_mpl.suptitle(f'GPU FBP Group - {N}x{N} / {n_angles} angles', y=0.98)
 plt.tight_layout()
-plt.savefig("img_out/fbp_group.png", dpi=150, bbox_inches='tight')
+plt.savefig("img_out/group_fbp.png", dpi=150, bbox_inches='tight')
 plt.close(fig1_mpl)
-print(f"   ✅ fbp_group.png (matplotlib)")
+print(f"   ✅ group_fbp.png (matplotlib)")
 
 # ===== 图2: IR 组 (CGLS + SIRT) =====
 fig2 = make_subplots(rows=2, cols=4,
@@ -253,8 +285,8 @@ for col, ni in enumerate([10, 30, 100]):
 fig2.update_layout(title=dict(text='IR Group: CGLS vs SIRT Convergence + Error Maps', y=0.98),
     height=700, width=1100, showlegend=True, margin=dict(t=80, b=40),
     legend=dict(x=0.3, y=1.12, orientation='h'))
-fig2.write_html("img_out/gpu_ir_group.html")
-print(f"   ✅ gpu_ir_group.html")
+fig2.write_html("img_out/group_ir.html")
+print(f"   ✅ group_ir.html")
 
 # matplotlib 快速出 PNG
 fig2_mpl = plt.figure(figsize=(12, 7))
@@ -302,9 +334,9 @@ for col, ni in enumerate([10, 30, 100]):
             break
 
 fig2_mpl.suptitle('IR Group: CGLS vs SIRT Convergence + Error Maps', y=0.98, fontsize=13)
-plt.savefig("img_out/gpu_ir_group.png", dpi=150, bbox_inches='tight')
+plt.savefig("img_out/group_ir.png", dpi=150, bbox_inches='tight')
 plt.close(fig2_mpl)
-print(f"   ✅ gpu_ir_group.png (matplotlib)")
+print(f"   ✅ group_ir.png (matplotlib)")
 
 # ===== 图3: 散点图 =====
 fig3 = go.Figure()
@@ -318,8 +350,8 @@ for name, t, r, _ in results:
         hovertemplate=f'{name}<br>{t*1000:.0f}ms<br>RMSE={r:.2f}<extra></extra>'))
 fig3.update_layout(title=dict(text='Speed vs Quality: FBP vs IR', y=0.95), xaxis_type='log',
     xaxis_title='Time (ms)', yaxis_title='RMSE', height=500, width=800, margin=dict(t=60, b=40))
-fig3.write_html("img_out/fbp_vs_ir_scatter.html")
-print(f"   ✅ fbp_vs_ir_scatter.html")
+fig3.write_html("img_out/group_scatter.html")
+print(f"   ✅ group_scatter.html")
 
 # matplotlib 快速出 PNG
 fig3_mpl, ax3 = plt.subplots(figsize=(8, 5))
@@ -336,8 +368,8 @@ ax3.set_ylabel('RMSE')
 ax3.set_title('Speed vs Quality: FBP vs IR')
 ax3.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig("img_out/fbp_vs_ir_scatter.png", dpi=150, bbox_inches='tight')
+plt.savefig("img_out/group_scatter.png", dpi=150, bbox_inches='tight')
 plt.close(fig3_mpl)
-print(f"   ✅ fbp_vs_ir_scatter.png (matplotlib)")
+print(f"   ✅ group_scatter.png (matplotlib)")
 
 print("\n全部完成 (HTML 浏览器打开)")
