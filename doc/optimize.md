@@ -1,5 +1,26 @@
 # optimize
 
+## optimize #002
+
+完成。`astra_hybrid.py` 现在只保留混合方法：
+
+```
+A. Pure FBP             24ms  RMSE=134.6  基线
+B. FBP+SIRT x10         46ms  RMSE=134.0  高质量（可加正则化继续优化）
+C. FBP+SART x5          10ms  RMSE=134.4  产品级首选 ⭐（4x快于FBP同质量）
+```
+
+**对比表：**
+```
+     FBP+SIRT    FBP+SART   速度比
+x10  134.0/46ms  134.3/14ms  3.2x
+x20  133.4/71ms  133.8/17ms  4.1x
+```
+
+**结论：**
+- **FBP+SART x5** = 10ms, 与 FBP 质量相同 → 产品最优选择
+- **FBP+SIRT x10** = 46ms, 质量略好且支持正则化 → 科研/高端场景
+- 
 ## optimize #001
 
 3. 优化实施总结
