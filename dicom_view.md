@@ -13,10 +13,7 @@ python fbp_test.py
 
 ## dicom view 
 
-
-
 ```sh
-conda activate tomo-test
 
 # 列出目录下所有 DICOM 文件
 python batch_view.py dicom_output/
@@ -32,15 +29,3 @@ python batch_view.py dicom_output/ --save
 
 # 查看单个文件
 python batch_view.py --file dicom_output/recon_fbp.dcm
-
-
-## tomopy
-
-~/miniconda3/bin/conda install -n tomo-test -c conda-forge tomopy=1.15.3 -y 2>&1 | tail -15
-
-## tomopy gpu 
-# ASTRA + CUDA
-conda install -c astra-toolbox astra-toolbox
-
-# 验证 GPU 可用
-python -c "import tomopy; print(tomopy.astra)"
