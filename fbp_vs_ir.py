@@ -11,6 +11,7 @@ from skimage.data import shepp_logan_phantom
 from skimage.transform import radon, resize
 
 import astra
+import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -175,8 +176,26 @@ for i in range(n_fbp):
 
 fig1.update_layout(title=dict(text=f'GPU FBP Group - {N}x{N} / {n_angles} angles', y=0.95, automargin=True),
     height=750, width=280*n_fbp, showlegend=False, margin=dict(t=120, b=40))
-fig1.write_image("img_out/fbp_group.png", format='png')
+fig1.write_html("img_out/fbp_group.html")
 print(f"   ✅ fbp_group.html")
+
+# matplotlib 快速出 PNG
+fig1_mpl, axes1 = plt.subplots(2, n_fbp, figsize=(4*n_fbp, 8))
+for i in range(n_fbp):
+    name, t, r, rec = fbp_data[i]
+    diff = rec - ct; diff[~circ_mask] = 0
+    md = np.abs(diff[circ_mask]).max()
+    vmax = max(30, np.percentile(np.abs(diff[circ_mask]), 95) * 1.2)
+    axes1[0, i].imshow(rec, cmap='gray', vmin=-200, vmax=600)
+    axes1[1, i].imshow(diff, cmap='RdBu', vmin=-vmax, vmax=vmax)
+    axes1[0, i].axis('off')
+    axes1[1, i].axis('off')
+    axes1[0, i].set_title(f"{name}\nRMSE={r:.1f}\n{t*1000:.0f}ms", fontsize=9)
+fig1_mpl.suptitle(f'GPU FBP Group - {N}x{N} / {n_angles} angles', y=0.98)
+plt.tight_layout()
+plt.savefig("img_out/fbp_group.png", dpi=150, bbox_inches='tight')
+plt.close(fig1_mpl)
+print(f"   ✅ fbp_group.png (matplotlib)")
 
 # ===== 图2: IR 组 (CGLS + SIRT) =====
 fig2 = make_subplots(rows=2, cols=4,
@@ -234,8 +253,58 @@ for col, ni in enumerate([10, 30, 100]):
 fig2.update_layout(title=dict(text='IR Group: CGLS vs SIRT Convergence + Error Maps', y=0.98),
     height=700, width=1100, showlegend=True, margin=dict(t=80, b=40),
     legend=dict(x=0.3, y=1.12, orientation='h'))
-fig2.write_image("img_out/gpu_ir_group.png", format='png')
+fig2.write_html("img_out/gpu_ir_group.html")
 print(f"   ✅ gpu_ir_group.html")
+
+# matplotlib 快速出 PNG
+fig2_mpl = plt.figure(figsize=(12, 7))
+gs = fig2_mpl.add_gridspec(2, 4, width_ratios=[0.35, 0.25, 0.2, 0.2], hspace=0.3, wspace=0.3)
+
+# 收敛曲线
+ax_curve = fig2_mpl.add_subplot(gs[0, 0])
+ax_curve.plot([d[0] for d in ir_data], [d[2] for d in ir_data], 'o-', color='purple', lw=2, label='CGLS')
+ax_curve.plot([d[0] for d in sirt_data], [d[2] for d in sirt_data], 's-', color='orange', lw=2, label='SIRT')
+ax_curve.set_xlabel('Iterations'); ax_curve.set_ylabel('RMSE')
+ax_curve.legend(); ax_curve.grid(True, alpha=0.3)
+ax_curve.set_title('IR Convergence')
+
+# CGLS 最优重建
+best_c = min(ir_data, key=lambda x: x[2])
+ax_cgls = fig2_mpl.add_subplot(gs[0, 1])
+ax_cgls.imshow(best_c[3], cmap='gray', vmin=-200, vmax=600)
+ax_cgls.axis('off'); ax_cgls.set_title(f'CGLS x{best_c[0]} Recon')
+
+# CGLS 误差
+best_c_diff = best_c[3] - ct; best_c_diff[~circ_mask] = 0
+vmax_c = max(30, np.percentile(np.abs(best_c_diff[circ_mask]), 95) * 1.2)
+ax_cerr = fig2_mpl.add_subplot(gs[0, 2])
+im = ax_cerr.imshow(best_c_diff, cmap='RdBu', vmin=-vmax_c, vmax=vmax_c)
+ax_cerr.axis('off'); ax_cerr.set_title(f'CGLS Error')
+
+# SIRT 误差
+best_s = min(sirt_data, key=lambda x: x[2])
+best_s_diff = best_s[3] - ct; best_s_diff[~circ_mask] = 0
+vmax_s = max(30, np.percentile(np.abs(best_s_diff[circ_mask]), 95) * 1.2)
+ax_serr = fig2_mpl.add_subplot(gs[0, 3])
+ax_serr.imshow(best_s_diff, cmap='RdBu', vmin=-vmax_s, vmax=vmax_s)
+ax_serr.axis('off'); ax_serr.set_title(f'SIRT Error')
+
+# 第二行: CGLS 不同迭代误差
+for col, ni in enumerate([10, 30, 100]):
+    for d in ir_data:
+        if d[0] == ni:
+            diff = d[3] - ct; diff[~circ_mask] = 0
+            vmax_d = max(30, np.percentile(np.abs(diff[circ_mask]), 95) * 1.2)
+            ax = fig2_mpl.add_subplot(gs[1, col])
+            ax.imshow(diff, cmap='RdBu', vmin=-vmax_d, vmax=vmax_d)
+            ax.axis('off')
+            ax.set_title(f'CGLS x{ni}\nRMSE={d[2]:.2f}', fontsize=10)
+            break
+
+fig2_mpl.suptitle('IR Group: CGLS vs SIRT Convergence + Error Maps', y=0.98, fontsize=13)
+plt.savefig("img_out/gpu_ir_group.png", dpi=150, bbox_inches='tight')
+plt.close(fig2_mpl)
+print(f"   ✅ gpu_ir_group.png (matplotlib)")
 
 # ===== 图3: 散点图 =====
 fig3 = go.Figure()
@@ -249,7 +318,26 @@ for name, t, r, _ in results:
         hovertemplate=f'{name}<br>{t*1000:.0f}ms<br>RMSE={r:.2f}<extra></extra>'))
 fig3.update_layout(title=dict(text='Speed vs Quality: FBP vs IR', y=0.95), xaxis_type='log',
     xaxis_title='Time (ms)', yaxis_title='RMSE', height=500, width=800, margin=dict(t=60, b=40))
-fig3.write_image("img_out/fbp_vs_ir_scatter.png", format='png')
+fig3.write_html("img_out/fbp_vs_ir_scatter.html")
 print(f"   ✅ fbp_vs_ir_scatter.html")
+
+# matplotlib 快速出 PNG
+fig3_mpl, ax3 = plt.subplots(figsize=(8, 5))
+color_map = {'FBP_CUDA': 'red', 'CGLS': 'purple', 'SIRT': 'orange'}
+marker_map = {'FBP_CUDA': '^', 'CGLS': 'o', 'SIRT': 's'}
+for name, t, r, _ in results:
+    cat = 'FBP_CUDA' if 'FBP_CUDA' in name else ('CGLS' if 'CGLS' in name else 'SIRT')
+    ax3.scatter(t*1000, r, c=color_map[cat], marker=marker_map[cat], s=120, zorder=5)
+    ax3.annotate(name[:20], (t*1000, r), textcoords='offset points', xytext=(0, 10),
+                ha='center', fontsize=9)
+ax3.set_xscale('log')
+ax3.set_xlabel('Time (ms)')
+ax3.set_ylabel('RMSE')
+ax3.set_title('Speed vs Quality: FBP vs IR')
+ax3.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig("img_out/fbp_vs_ir_scatter.png", dpi=150, bbox_inches='tight')
+plt.close(fig3_mpl)
+print(f"   ✅ fbp_vs_ir_scatter.png (matplotlib)")
 
 print("\n全部完成 (HTML 浏览器打开)")
