@@ -14,9 +14,6 @@ FBP + IR 混合重建
 模式:
   - GPU 模式: 使用 ASTRA toolbox (CUDA 加速), 需安装 astra-toolbox + CUDA
 
-与 fbp_vs_ir.py 的区别:
-  - gpu_fbp_vs_ir.py: 纯方法对比 (FBP vs CGLS vs SIRT)
-  - fbp_plus_ir.py:   混合方法 (FBP初始化+IR迭代)
 """
 
 import numpy as np
@@ -184,7 +181,7 @@ sid = astra.data2d.create('-sino', proj_geom, sino)
 fbc_hist = []
 best_fc = {'rmse': 1e9, 'ssim': -1, 'rec': None, 't': 0, 'n': 0}
 for n_iter in cgls_iters:
-    rid = astra.data2d.create('-vol', vol_geom, data=fbp_rec.astype(np.float32))
+    rid = astra.data2d.create('-vol', vol_geom, data=rec_fbp.astype(np.float32))
     cfg = astra.astra_dict('CGLS_CUDA')
     cfg['ProjectionDataId'] = sid
     cfg['ReconstructionDataId'] = rid
@@ -241,7 +238,7 @@ sid = astra.data2d.create('-sino', proj_geom, sino)
 fbs_hist = []
 best_fs = {'rmse': 1e9, 'ssim': -1, 'rec': None, 't': 0, 'n': 0}
 for n_iter in sirt_iters:
-    rid = astra.data2d.create('-vol', vol_geom, data=fbp_rec.astype(np.float32))
+    rid = astra.data2d.create('-vol', vol_geom, data=rec_fbp.astype(np.float32))
     cfg = astra.astra_dict('SIRT_CUDA')
     cfg['ProjectionDataId'] = sid
     cfg['ReconstructionDataId'] = rid
@@ -374,9 +371,9 @@ cax = fig.add_subplot(gs[1, 6])
 plt.colorbar(im, cax=cax)
 cax.set_ylabel('HU Error', fontsize=8)
 plt.suptitle('FBP + IR Hybrid Reconstruction (GPU: ASTRA CUDA)', fontsize=15, fontweight='bold', y=0.98)
-plt.savefig("img_out/fbp_plus_ir.png", dpi=150, bbox_inches='tight')
+plt.savefig("img_out/astra_hybrid.png", dpi=150, bbox_inches='tight')
 plt.close()
-print("   => img_out/fbp_plus_ir.png")
+print("   => img_out/astra_hybrid.png")
 
 # ============================================================
 # 保存总结
@@ -387,9 +384,9 @@ summary = {
     'results': {name: {'rmse': round(r, 2), 'ssim': round(s, 4), 'time_ms': round(t*1000, 1)}
                 for name, t, r, s, _ in results},
 }
-with open("img_out/fbp_plus_ir_summary.json", "w") as f:
+with open("img_out/astra_hybrid_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
-print("   => img_out/fbp_plus_ir_summary.json")
+print("   => img_out/astra_hybrid_summary.json")
 
 print("\n" + "=" * 60)
 print("Done!")

@@ -3,10 +3,13 @@
 * fbp vs ir
 * fbp add ir
 * based gpu (astra-toolbox and tigre)
+* tomophantom (体模生成库)
 * rtk (not run on gpu directly,now not used.)
 * axial and helical (now ,just axial)
 ## env 
-conda with cupy (uv not ok ,for cuda and other),todo:uv 
+
+uv cuda cupy astra tigre tomophantom matplotlib
+
 ## examples
 
 
@@ -18,14 +21,14 @@ conda with cupy (uv not ok ,for cuda and other),todo:uv
 ![group_fbp](img_out/group_fbp.png)
 ![group_ir](img_out/group_ir.png)
 fbp vs ir 
-### fbp_plus_ir.py
+### astra_hybrid.py
 
 fbp first and then to ir 
-![fbp_plus_ir](img_out/fbp_plus_ir.png)
+![astra_hybrid](img_out/astra_hybrid.png)
 ### tigre_plus_ir.py
 
-tigre_plus_ir
-![tigre_fbp_plus_ir](img_out/tigre_fbp_plus_ir.png)
+tigre_hybrid
+![tigre_hybrid](img_out/tigre_hybrid.png)
 
 ## install
 
