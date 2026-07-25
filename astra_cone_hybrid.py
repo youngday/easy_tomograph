@@ -206,15 +206,84 @@ astra.data3d.delete(sino_id)
 print(f"   >> 最优: SIRT3D x{best_sirt['n']}: RMSE={best_sirt['rmse']:.5f}, SSIM={best_sirt['ssim']:.4f}")
 
 # ============================================================
+# C. FBP + OS-SART (SIRT3D 子集交替, 20子集)
+# ============================================================
+print("-" * 55)
+print("C. FBP + OS-SART (20子集, SIRT3D 子集交替)")
+print("-" * 55)
+print("   ASTRA 无原生 OS-SART, 用 SIRT3D_CUDA 在各子集交替迭代实现")
+
+n_subsets = 20
+subset_size = n_angles // n_subsets
+
+# 为每个子集创建独立的投影几何 + sinogram
+subsets = []
+for i in range(n_subsets):
+    idx = slice(i * subset_size, (i + 1) * subset_size)
+    sub_vec = vectors[idx].copy()
+    pg_sub = astra.create_proj_geom('cone_vec', n_det_row, n_det_col, sub_vec)
+    sino_sub = np.ascontiguousarray(sino[:, idx, :])
+    sid_sub = astra.data3d.create('-sino', pg_sub, sino_sub)
+    subsets.append((pg_sub, sid_sub))
+
+fbo_hist = []
+best_fo = {'rmse': 1e9, 'ssim': -1, 'rec': None, 't': 0, 'n': 0}
+vol_os = fdk_raw.copy()
+os_iters = [1, 2, 5, 10]
+prev_n = 0
+
+for n_iter in os_iters:
+    t0 = time()
+    for _ in range(n_iter - prev_n):
+        for pg_sub, sid_sub in subsets:
+            rid_sub = astra.data3d.create('-vol', vol_geom, data=vol_os.astype(np.float32))
+            cfg = astra.astra_dict('SIRT3D_CUDA')
+            cfg['ProjectionDataId'] = sid_sub
+            cfg['ReconstructionDataId'] = rid_sub
+            cfg['option'] = {'GPUindex': 0}
+            aid = astra.algorithm.create(cfg)
+            astra.algorithm.run(aid, 1)
+            vol_os = astra.data3d.get(rid_sub).copy()
+            astra.algorithm.delete(aid)
+            astra.data3d.delete(rid_sub)
+    t = time() - t0
+    rec = linear_scale(vol_os)
+    r, s = calc_rmse(rec), calc_ssim(rec)
+    fbo_hist.append((n_iter, t, r, s))
+    if r < best_fo['rmse']:
+        best_fo = {'rmse': r, 'ssim': s, 'rec': rec, 't': t, 'n': n_iter}
+    print(f"   x{n_iter:3d}轮: RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
+    prev_n = n_iter
+
+for _, sid in subsets:
+    astra.data3d.delete(sid)
+print(f"   >> 最优: OS-SART x{best_fo['n']}: RMSE={best_fo['rmse']:.5f}, SSIM={best_fo['ssim']:.4f}")
+
+# ============================================================
 # 汇总对比
 # ============================================================
 print("\n" + "=" * 60)
 print("汇总对比")
 print("=" * 60)
-print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>10s} {'SSIM':>8s}")
-print("-" * 60)
-print(f"{'Pure FDK':30s} {fdk_t*1000:>8.0f} ms {fdk_rmse:>10.5f} {fdk_ssim:>8.4f}")
-print(f"{'FBP+SIRT3D x'+str(best_sirt['n']):30s} {best_sirt['t']*1000:>8.0f} ms {best_sirt['rmse']:>10.5f} {best_sirt['ssim']:>8.4f}")
+print(f"{'算法':35s} {'耗时(ms)':>10s} {'RMSE':>10s} {'SSIM':>8s}")
+print("-" * 65)
+print(f"{'Pure FDK':35s} {fdk_t*1000:>8.0f} ms {fdk_rmse:>10.5f} {fdk_ssim:>8.4f}")
+print(f"{'FBP+SIRT3D x'+str(best_sirt['n']):35s} {best_sirt['t']*1000:>8.0f} ms {best_sirt['rmse']:>10.5f} {best_sirt['ssim']:>8.4f}")
+print(f"{'FBP+OS-SART x'+str(best_fo['n']):35s} {best_fo['t']*1000:>8.0f} ms {best_fo['rmse']:>10.5f} {best_fo['ssim']:>8.4f}")
+
+# 等迭代对比
+print("\n" + "=" * 60)
+print("等迭代对比 (SIRT vs OS-SART)")
+print("=" * 60)
+print(f"{'轮次':>6s} {'SIRT3D':>22s} {'OS-SART(手动)':>22s}")
+print(f"{'':>6s} {'RMSE/耗时':>22s} {'RMSE/耗时':>22s}")
+print("-" * 52)
+for n in [5, 10]:
+    sr = next((h for h in sirt_hist if h[0] == n), None)
+    fo = next((h for h in fbo_hist if h[0] == n), None)
+    r1 = f"{sr[2]:.5f}/{sr[1]*1000:.0f}ms" if sr else "-"
+    r2 = f"{fo[2]:.5f}/{fo[1]*1000:.0f}ms" if fo else "-"
+    print(f"  x{n:3d}    {r1:>22s}  {r2:>22s}")
 
 # ============================================================
 # 与 TIGRE 锥束结果对比
@@ -227,7 +296,8 @@ print("-" * 61)
 print(f"{'FDK 耗时':25s} {fdk_t*1000:>8.0f} ms {'62ms':>18s}")
 print(f"{'FDK RMSE':25s} {fdk_rmse:>18.5f} {'0.00521':>18s}")
 print(f"{'SIRT x50 耗时':25s} {best_sirt['t']*1000:>8.0f} ms {'2287ms':>18s}")
-print(f"{'SIRT x50 RMSE':25s} {best_sirt['rmse']:>18.5f} {'0.00331':>18s}")
+print(f"{'FBP+SIRT x50 RMSE':25s} {best_sirt['rmse']:>18.5f} {'0.00331':>18s}")
+print(f"{'FBP+OS-SART x5 RMSE':25s} {best_fo['rmse']:>18.5f} {'0.00324':>18s}")
 
 # ============================================================
 # 结果列表
@@ -235,6 +305,7 @@ print(f"{'SIRT x50 RMSE':25s} {best_sirt['rmse']:>18.5f} {'0.00331':>18s}")
 results = [
     ('Pure FDK', fdk_t, fdk_rmse, fdk_ssim),
     ('FBP+SIRT3D x'+str(best_sirt['n']), best_sirt['t'], best_sirt['rmse'], best_sirt['ssim']),
+    ('FBP+OS-SART x'+str(best_fo['n']), best_fo['t'], best_fo['rmse'], best_fo['ssim']),
 ]
 
 # ============================================================
@@ -244,11 +315,11 @@ print("\n生成可视化...")
 os.makedirs("img_out", exist_ok=True)
 mid = nz // 2
 
-fig = plt.figure(figsize=(12, 8))
-gs = GridSpec(2, 3, figure=fig, hspace=0.3, wspace=0.3)
+fig = plt.figure(figsize=(16, 8))
+gs = GridSpec(2, 4, figure=fig, hspace=0.3, wspace=0.3)
 
-titles = ['Ground Truth', 'Pure FDK', 'FBP+SIRT3D']
-imgs = [vol_gt[mid], fdk_rec[mid], best_sirt['rec'][mid]]
+titles = ['Ground Truth', 'Pure FDK', 'FBP+SIRT3D', 'FBP+OS-SART']
+imgs = [vol_gt[mid], fdk_rec[mid], best_sirt['rec'][mid], best_fo['rec'][mid]]
 for i, (t, im) in enumerate(zip(titles, imgs)):
     ax = fig.add_subplot(gs[0, i])
     ax.imshow(im, cmap='gray', vmin=0, vmax=0.05)
@@ -256,8 +327,8 @@ for i, (t, im) in enumerate(zip(titles, imgs)):
     ax.axis('off')
 
 errs = [np.zeros_like(vol_gt[mid]), fdk_rec[mid] - vol_gt[mid],
-        best_sirt['rec'][mid] - vol_gt[mid]]
-err_titles = ['Error (GT)', 'FDK Error', 'SIRT3D Error']
+        best_sirt['rec'][mid] - vol_gt[mid], best_fo['rec'][mid] - vol_gt[mid]]
+err_titles = ['Error (GT)', 'FDK Error', 'SIRT3D Error', 'OS-SART Error']
 for i, (t, e) in enumerate(zip(err_titles, errs)):
     ax = fig.add_subplot(gs[1, i])
     vmax = max(0.005, np.percentile(np.abs(e), 95) * 1.2)
@@ -265,7 +336,7 @@ for i, (t, e) in enumerate(zip(err_titles, errs)):
     ax.set_title(t, fontsize=9)
     ax.axis('off')
 
-plt.suptitle('Cone-beam CBCT: ASTRA CUDA (512x512x32, 360 angles)', fontsize=13, fontweight='bold', y=0.98)
+plt.suptitle('Cone-beam CBCT: ASTRA CUDA (512x12x32, 360 angles)', fontsize=13, fontweight='bold', y=0.98)
 plt.savefig("img_out/astra_cone_hybrid.png", dpi=150, bbox_inches='tight')
 plt.close()
 print("   => img_out/astra_cone_hybrid.png")
