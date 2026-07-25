@@ -29,3 +29,9 @@ fbp first and then to ir
 
 note:tigre and tomophantom need install by github path
 [install_by_uv](install_by_uv.md)
+
+## option gpu moniter
+https://github.com/msminhas93/nviwatch
+cargo install nviwatch
+
+nviwatch
