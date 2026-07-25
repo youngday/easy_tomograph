@@ -26,6 +26,12 @@ tar xzf /tmp/TIGRE-3.1.3.tar.gz -C /tmp && echo "Extract OK" && ls /tmp/TIGRE-3.
 uv pip install numpy scipy matplotlib h5py tqdm 2>&1 | tail -5
 uv pip install /tmp/TIGRE-3.1.3 2>&1
 
+
+## tomophantom
+
+HTTPS_PROXY=http://127.0.0.1:31181 uv add git+https://github.com/dkazanc/TomoPhantom.git 2>&1 | tail -10
+
+
 # 编译安装
 uv pip install numpy scipy matplotlib h5py tqdm
 uv pip install .

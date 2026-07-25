@@ -22,6 +22,8 @@ FBP + IR 混合重建
 import numpy as np
 from time import time
 from skimage.transform import radon
+import tomophantom
+from tomophantom import TomoP2D
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'SimHei', 'DejaVu Sans']
@@ -52,38 +54,15 @@ n_angles = 360
 print(f"体模: {N}x{N}, 角度: {n_angles}")
 
 # ============================================================
-# 1. 生成体模 (自定义头部横断面, 12种组织, 与 TIGRE 版一致)
+# 1. 生成体模 (TomoPhantom Model 4 - QRM 多椭圆体模)
 # ============================================================
-def _add_ellipse(img, cx, cy, rx, ry, angle, value):
-    cos_a = np.cos(np.deg2rad(angle))
-    sin_a = np.sin(np.deg2rad(angle))
-    xr = (X - cx) * cos_a + (Y - cy) * sin_a
-    yr = -(X - cx) * sin_a + (Y - cy) * cos_a
-    img[(xr / rx)**2 + (yr / ry)**2 <= 1] = value
-
+tp_lib = os.path.join(os.path.dirname(tomophantom.__file__),
+                       'phantomlib', 'Phantom2DLibrary.dat')
+ph = TomoP2D.Model(4, N, tp_lib)
+ct = (ph - 0.65) * 2000 / 0.65
+ct = ct.astype(np.float32)
 Y, X = np.ogrid[:N, :N]
-ct = np.full((N, N), -1000, dtype=np.float32)
-_add_ellipse(ct, 256, 256, 210, 170, 0, 50)   # 头皮
-_add_ellipse(ct, 256, 256, 185, 150, 0, 800)  # 颅骨外板
-_add_ellipse(ct, 256, 256, 175, 142, 0, 300)  # 颅骨内板
-_add_ellipse(ct, 256, 256, 160, 130, 0, 35)   # 灰质
-_add_ellipse(ct, 256, 246, 110, 90, 0, 28)    # 白质
-_add_ellipse(ct, 260, 270, 90, 80, 0, 28)
-_add_ellipse(ct, 240, 235, 30, 18, -15, 5)    # 侧脑室
-_add_ellipse(ct, 272, 235, 30, 18, 15, 5)
-_add_ellipse(ct, 256, 220, 12, 6, 0, 5)       # 第三脑室
-_add_ellipse(ct, 245, 230, 12, 10, 0, 38)      # 丘脑
-_add_ellipse(ct, 267, 230, 12, 10, 0, 38)
-_add_ellipse(ct, 235, 420, 22, 22, 0, 20)      # 眼球
-_add_ellipse(ct, 277, 420, 22, 22, 0, 20)
-_add_ellipse(ct, 235, 410, 8, 4, 0, 120)      # 晶状体
-_add_ellipse(ct, 277, 410, 8, 4, 0, 120)
-_add_ellipse(ct, 256, 370, 18, 8, 0, -1000)    # 鼻腔
-_add_ellipse(ct, 256, 340, 15, 5, 0, -800)     # 额窦
-_add_ellipse(ct, 210, 210, 10, 8, 30, 50)      # 小肿瘤
-_add_ellipse(ct, 250, 260, 3, 3, 0, 400)       # 钙化点
-
-head_r = 215
+head_r = 235
 circ_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= head_r ** 2
 ct[~circ_mask] = -1000
 

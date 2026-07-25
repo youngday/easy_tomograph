@@ -10,7 +10,11 @@ dependencies = [
     "matplotlib>=3.11.1",
     "plotly>=6.9.0",
     "scikit-image>=0.26.0",
+    "tomophantom",
 ]
 [tool.uv]
 # 国内 PyPI 镜像（清华 TUNA），加速包下载
 index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
+[tool.uv.sources]
+tomophantom = { git = "https://github.com/dkazanc/TomoPhantom.git" }

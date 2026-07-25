@@ -17,6 +17,8 @@ FBP + IR 混合重建 (TIGRE GPU)
 
 import numpy as np
 from time import time
+import tomophantom
+from tomophantom import TomoP2D
 from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
@@ -49,55 +51,20 @@ n_angles = 360
 print(f"体模: {N}x{N}, 角度: {n_angles}")
 
 # ============================================================
-# 1. 生成体模 (自定义头部横断面, 12种组织)
+# 1. 生成体模 (TomoPhantom Model 4 - QRM 多椭圆体模)
 # ============================================================
-def _add_ellipse(img, cx, cy, rx, ry, angle, value):
-    cos_a = np.cos(np.deg2rad(angle))
-    sin_a = np.sin(np.deg2rad(angle))
-    xr = (X - cx) * cos_a + (Y - cy) * sin_a
-    yr = -(X - cx) * sin_a + (Y - cy) * cos_a
-    img[(xr / rx)**2 + (yr / ry)**2 <= 1] = value
+tp_lib = os.path.join(os.path.dirname(tomophantom.__file__),
+                       'phantomlib', 'Phantom2DLibrary.dat')
+ph = TomoP2D.Model(4, N, tp_lib)  # QRM phantom [0, 1.3]
+ct = (ph - 0.65) * 2000 / 0.65  # 映射到 HU: 0→-1000, 1.3→1000
+ct = ct.astype(np.float32)
 
 Y, X = np.ogrid[:N, :N]
-ct = np.full((N, N), -1000, dtype=np.float32)
-# 头皮/软组织  (~50 HU)
-_add_ellipse(ct, 256, 256, 210, 170, 0, 50)
-# 颅骨外板      (~800 HU)
-_add_ellipse(ct, 256, 256, 185, 150, 0, 800)
-# 颅骨内板/松质 (~300 HU)
-_add_ellipse(ct, 256, 256, 175, 142, 0, 300)
-# 灰质          (~35 HU)
-_add_ellipse(ct, 256, 256, 160, 130, 0, 35)
-# 白质          (~28 HU)
-_add_ellipse(ct, 256, 246, 110, 90, 0, 28)
-_add_ellipse(ct, 260, 270, 90, 80, 0, 28)
-# 侧脑室/CSF   (~5 HU)
-_add_ellipse(ct, 240, 235, 30, 18, -15, 5)
-_add_ellipse(ct, 272, 235, 30, 18, 15, 5)
-# 第三脑室      (~5 HU)
-_add_ellipse(ct, 256, 220, 12, 6, 0, 5)
-# 丘脑          (~38 HU)
-_add_ellipse(ct, 245, 230, 12, 10, 0, 38)
-_add_ellipse(ct, 267, 230, 12, 10, 0, 38)
-# 眼球          (~20 HU)
-_add_ellipse(ct, 235, 420, 22, 22, 0, 20)
-_add_ellipse(ct, 277, 420, 22, 22, 0, 20)
-# 晶状体        (~120 HU)
-_add_ellipse(ct, 235, 410, 8, 4, 0, 120)
-_add_ellipse(ct, 277, 410, 8, 4, 0, 120)
-# 鼻腔/额窦     (-1000 / -800 HU)
-_add_ellipse(ct, 256, 370, 18, 8, 0, -1000)
-_add_ellipse(ct, 256, 340, 15, 5, 0, -800)
-# 小肿瘤        (~50 HU, 稍高于灰质)
-_add_ellipse(ct, 210, 210, 10, 8, 30, 50)
-# 钙化点        (~400 HU)
-_add_ellipse(ct, 250, 260, 3, 3, 0, 400)
-
-head_r = 215  # 头部半径 (略大于头皮 210)
+head_r = 235
 circ_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= head_r ** 2
 ct[~circ_mask] = -1000
 
-# 余弦软遮罩: 在圆形边缘过渡带平滑到背景
+# 软遮罩
 dist = np.sqrt((X - N / 2) ** 2 + (Y - N / 2) ** 2)
 soft_mask = np.clip((head_r + 20 - dist) / 20, 0, 1)
 
