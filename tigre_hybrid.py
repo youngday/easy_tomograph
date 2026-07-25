@@ -308,15 +308,15 @@ for n in sorted(common_iters):
     fc = next((h for h in fbc_hist if h[0] == n), None)
     sr = next((h for h in sirt_hist if h[0] == n), None)
     fs = next((h for h in fbs_hist if h[0] == n), None)
-    
+
     cg_str = f"{cg[2]:.1f}" if cg else "-"
     fc_str = f"{fc[2]:.1f}" if fc else "-"
     sr_str = f"{sr[2]:.1f}" if sr else "-"
     fs_str = f"{fs[2]:.1f}" if fs else "-"
-    
+
     imp_cg = f"{(cg[2]-fc[2])/cg[2]*100:+.1f}%" if cg and fc else "-"
     imp_sr = f"{(sr[2]-fs[2])/sr[2]*100:+.1f}%" if sr and fs else "-"
-    
+
     print(f"  x{n:4d}     {cg_str:>8s}    {fc_str:>8s}   {imp_cg:>8s}  |  {sr_str:>8s}    {fs_str:>8s}   {imp_sr:>8s}")
 
 # 额外: 展示 FBP+SIRT 在 x50/x100 的性价比
