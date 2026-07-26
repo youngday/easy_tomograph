@@ -7,12 +7,13 @@
     python batch_view.py <目录> --save    # 批量导出为 PNG
 """
 
+import argparse
 import os
 import sys
-import argparse
-import pydicom
+
 import matplotlib.pyplot as plt
 import numpy as np
+import pydicom
 
 
 def find_dicom_files(directory):
@@ -22,9 +23,9 @@ def find_dicom_files(directory):
         for f in sorted(files):
             fp = os.path.join(root, f)
             try:
-                with open(fp, 'rb') as fh:
+                with open(fp, "rb") as fh:
                     header = fh.read(132)
-                    if header[128:132] == b'DICM':
+                    if header[128:132] == b"DICM":
                         dicom_files.append(fp)
             except Exception:
                 pass
@@ -126,16 +127,16 @@ def batch_show(directory):
 
             plt.figure(figsize=(10, 4))
             plt.subplot(121)
-            plt.imshow(img, cmap='gray')
+            plt.imshow(img, cmap="gray")
             plt.title(f"{fname}\n{ds.SeriesDescription}")
-            plt.axis('off')
+            plt.axis("off")
             plt.colorbar(fraction=0.046)
 
             plt.subplot(122)
-            plt.hist(img.ravel(), bins=256, color='steelblue')
-            plt.title('Histogram')
-            plt.xlabel('Pixel Value')
-            plt.ylabel('Frequency')
+            plt.hist(img.ravel(), bins=256, color="steelblue")
+            plt.title("Histogram")
+            plt.xlabel("Pixel Value")
+            plt.ylabel("Frequency")
             plt.grid(alpha=0.3)
 
             plt.tight_layout()
@@ -163,9 +164,11 @@ def batch_save(directory, out_dir="dicom_png"):
             out_path = os.path.join(out_dir, fname)
 
             # 归一化到 0-255
-            img_norm = ((img - img.min()) / (img.max() - img.min() + 1e-8) * 255).astype(np.uint8)
+            img_norm = (
+                (img - img.min()) / (img.max() - img.min() + 1e-8) * 255
+            ).astype(np.uint8)
 
-            plt.imsave(out_path, img_norm, cmap='gray')
+            plt.imsave(out_path, img_norm, cmap="gray")
             print(f"   ✅ {fname}")
         except Exception as e:
             print(f"   ⚠ {os.path.basename(fp)}: {e}")
@@ -175,22 +178,24 @@ def batch_save(directory, out_dir="dicom_png"):
 
 def main():
     parser = argparse.ArgumentParser(description="批量查看 DICOM 文件")
-    parser.add_argument("directory", nargs="?", default=".",
-                        help="DICOM 文件目录 (默认: 当前目录)")
-    parser.add_argument("--show", action="store_true",
-                        help="逐张显示所有 DICOM 图像")
-    parser.add_argument("--info", action="store_true",
-                        help="显示元数据摘要表格")
-    parser.add_argument("--save", nargs="?", const="dicom_png",
-                        help="批量导出为 PNG (可指定输出目录)")
-    parser.add_argument("--file", type=str, default=None,
-                        help="指定单个文件 (用于 --show)")
+    parser.add_argument(
+        "directory", nargs="?", default=".", help="DICOM 文件目录 (默认: 当前目录)"
+    )
+    parser.add_argument("--show", action="store_true", help="逐张显示所有 DICOM 图像")
+    parser.add_argument("--info", action="store_true", help="显示元数据摘要表格")
+    parser.add_argument(
+        "--save", nargs="?", const="dicom_png", help="批量导出为 PNG (可指定输出目录)"
+    )
+    parser.add_argument(
+        "--file", type=str, default=None, help="指定单个文件 (用于 --show)"
+    )
 
     args = parser.parse_args()
 
     if args.file:
         # 查看单个文件
         from read_dicom import read_and_show
+
         read_and_show(args.file)
     elif args.info:
         batch_info(args.directory)

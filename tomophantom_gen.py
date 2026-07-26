@@ -3,8 +3,13 @@ TomoPhantom QRM 体模生成器
 ===========================
 生成 Model 4 (QRM) 体模并映射到 CT 值范围
 """
-import tomophantom, os, numpy as np
+
+import os
+
+import numpy as np
+import tomophantom
 from tomophantom import TomoP2D
+
 
 def make_phantom(N=512, model=4, hu_range=2000):
     """
@@ -19,8 +24,9 @@ def make_phantom(N=512, model=4, hu_range=2000):
         ct: (N, N) float32, HU 值
         circ_mask: 圆形掩膜
     """
-    lib = os.path.join(os.path.dirname(tomophantom.__file__),
-                       'phantomlib', 'Phantom2DLibrary.dat')
+    lib = os.path.join(
+        os.path.dirname(tomophantom.__file__), "phantomlib", "Phantom2DLibrary.dat"
+    )
     ph = TomoP2D.Model(model, N, lib)
 
     # 映射到 HU: 假设 ph ∈ [0, max_val]
@@ -30,21 +36,22 @@ def make_phantom(N=512, model=4, hu_range=2000):
 
     Y, X = np.ogrid[:N, :N]
     head_r = int(N * 0.46)
-    circ_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= head_r ** 2
+    circ_mask = (X - N / 2) ** 2 + (Y - N / 2) ** 2 <= head_r**2
     ct[~circ_mask] = -1000
 
     return ct, circ_mask
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     ct, mask = make_phantom()
-    print(f'体模: {ct.shape}, 范围 [{ct.min():.0f}, {ct.max():.0f}]')
+    print(f"体模: {ct.shape}, 范围 [{ct.min():.0f}, {ct.max():.0f}]")
 
     import matplotlib.pyplot as plt
-    plt.imshow(ct, cmap='gray', vmin=-200, vmax=600)
-    plt.colorbar(label='HU')
-    plt.title('QRM Phantom (Model 4)')
-    plt.axis('off')
-    plt.savefig('img_out/qrm_phantom.png', dpi=150, bbox_inches='tight')
+
+    plt.imshow(ct, cmap="gray", vmin=-200, vmax=600)
+    plt.colorbar(label="HU")
+    plt.title("QRM Phantom (Model 4)")
+    plt.axis("off")
+    plt.savefig("img_out/qrm_phantom.png", dpi=150, bbox_inches="tight")
     plt.close()
-    print('✅ img_out/qrm_phantom.png')
+    print("✅ img_out/qrm_phantom.png")
