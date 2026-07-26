@@ -18,8 +18,8 @@ uv cuda cupy astra tigre tomophantom matplotlib
 ### fbp_vs_ir.py 
 
 * fbp filters
-![group_fbp](img_out/group_fbp.png)
-![group_ir](img_out/group_ir.png)
+<!--![group_fbp](img_out/group_fbp.png)-->
+<!--![group_ir](img_out/group_ir.png)-->
 fbp vs ir 
 ### astra_hybrid.py
 
