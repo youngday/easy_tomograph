@@ -33,7 +33,7 @@ tigre_hybrid
 ## install
 
 note:tigre and tomophantom need install by github path
-[install_by_uv](install_by_uv.md)
+[install_by_uv](doc/install_by_uv.md)
 
 ## option gpu moniter
 
