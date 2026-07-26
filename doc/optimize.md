@@ -1,5 +1,38 @@
 # optimize
 
+## optimize #006 tv
+aligned parameter
+stable at os-sart
+to check tv
+
+对齐成功！几何统一后结果一致
+
+### 几何参数统一
+| 参数 | ASTRA | TIGRE |
+|------|-------|-------|
+| DSO | 1000 | 1000 |
+| 总 source-detector | 1500 | 1500 |
+| Voxel | 各向同性 1.0mm | 各向同性 1.0mm |
+| Detector | 各向同性 1.0mm | 各向同性 1.0mm |
+
+### 最终对比表
+
+| 算法 | ASTRA | TIGRE |
+|------|-------|-------|
+| **FDK** | 388ms, RMSE=**0.00082** | 462ms, RMSE=**0.00084** ← 对齐后一致！ |
+| **OS-SART x10 (clean)** | 9147ms, RMSE=**0.00020** | 9154ms, RMSE=**0.00025** ← 速度一致 |
+| **Noisy OS-SART best** | 3674ms, RMSE=0.00433 | 2315ms, RMSE=**0.00186** |
+| **TV-OS-SART best** | 4033ms, RMSE=**0.00123** | 9868ms, RMSE=**0.00114** |
+| **TV 改善** | **+71.5%** ✅ | +38.6% |
+
+### 关键发现
+
+1. **几何对齐解决了 TIGRE FDK 问题**: FDK RMSE 从 0.00605 → 0.00084 (ASTRA 0.00082)，几乎一致
+2. **TIGRE 正投影速度依旧慢**: Ax 1430ms vs ASTRA FP3D 828ms (1.7x慢)
+3. **OS-SART 速度对齐后持平**: ~9.1s 对 ~9.2s
+4. **TV-OS-SART**: ASTRA 更快 (4.0s vs 9.9s) 且 TV 改善更大 (+71.5%)
+5. **TIGRE 优势**: 噪声 OS-SART 本身就更好 (tigre blocksize=36 相当于10子集，比 ASTRA 20子集噪声稳定性好)
+
 ## optimize #005 noise
 
 ### 统一体模 Model 4 — 公平对比
