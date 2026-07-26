@@ -21,14 +21,20 @@ uv cuda cupy astra tigre tomophantom matplotlib
 <!--![group_fbp](img_out/group_fbp.png)-->
 <!--![group_ir](img_out/group_ir.png)-->
 fbp vs ir 
+## 2d fan hybrid
+sirt os-sart
 ### astra_hybrid.py
-
-fbp first and then to ir 
 ![astra_hybrid](img_out/astra_hybrid.png)
-### tigre_plus_ir.py
-
-tigre_hybrid
+### tigre_hybrid.py
 ![tigre_hybrid](img_out/tigre_hybrid.png)
+
+## 3d cone hybrid
+sirt os-sart
+### astra_cone_hybrid.py
+![astra_cone_hybrid](img_3d_out/astra_cone_hybrid.png)
+### tigre_cone_hybrid.py
+tigre_hybrid
+![tigre_cone_hybrid](img_3d_out/tigre_cone_hybrid.png)
 
 ## install
 
