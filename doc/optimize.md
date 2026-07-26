@@ -1,5 +1,54 @@
 # optimize
 
+## optimize #005 noise
+
+### 统一体模 Model 4 — 公平对比
+
+| 算法 | ASTRA | TIGRE | 对比 |
+|------|-------|-------|------|
+| **FDK** | 426ms, RMSE=**0.00082** | 524ms, RMSE=**0.00605** | **TIGRE FDK 质量差7.4x** |
+| **SIRT3D x50** | 12634ms, RMSE=**0.00024** | — (无SIRT3D) | — |
+| **OS-SART x10** | 12340ms, RMSE=**0.00020** | 15518ms, RMSE=**0.00191** | TIGRE: 1.26x慢, 质量差9.5x |
+| **TV-OS-SART x5** | — | 12174ms, RMSE=**0.00213** | TV改善+30.5% |
+
+---
+
+### 关键问题: TIGRE 为什么慢？
+
+| 瓶颈 | 测量值 | 根因 |
+|------|--------|------|
+| **正投影 (Ax)** | TIGRE 3094ms vs ASTRA 805ms (**3.8x慢**) | TIGRE CUDA kernel 不如 ASTRA 优化充分 |
+| **FDK** | TIGRE 524ms vs ASTRA 426ms (1.2x慢) | TIGRE FDK 用 `hann` 滤波不如 ASTRA FDK_CUDA |
+| **OS-SART** | 每轮~1552ms vs ASTRA~1234ms | blocksize=36 → 10子集, 每子集1次FP+BP |
+| **Python-C 边界开销** | 每次调用~0.5s | TIGRE 每次 alg 调用都要重建 CUDA 上下文 |
+
+### TIGRE FDK 为什么差 (RMSE 0.00605 vs 0.00082)?
+
+```
+体模范围: [0, 0.03646]
+TIGRE FDK 的 SSIM 只有 0.6622 —— 说明:
+  1. TIGRE 的 FDK 默认滤波/重采样与 ASTRA 不同
+  2. TIGRE cone-beam 几何 (DSD=1536, DSO=1000) 放大比不同
+  3. 缺少像 ASTRA FDK_CUDA 那样的体素驱动插值优化
+```
+
+### TIGRE 现存的优化空间
+
+| 可优化项 | 当前 | 可改进 | 预期效果 |
+|----------|------|--------|----------|
+| **blocksize** | 36 (10子集) | 60 (6子集) | 速度+40%, 但收敛略降 |
+| **正投影角度并行** | 串行 | 无法改(C层) | — |
+| **warm-start** | 已用 | 已最优 | — |
+| **算法数量** | FDK/OS-SART/TV | TIGRE 特有的 **ASD-POCS**/**Bisection** | 需要 TIGRE 3.1.3 |
+
+### 结论
+
+| 方面 | ASTRA | TIGRE |
+|------|-------|-------|
+| **锥束 FDK 质量** | ✅ 优秀 (0.00082) | ❌ 差 (0.00605) — 几何配置需调优 |
+| **锥束 IR 速度** | ✅ 快 (SIRT3D子集) | ❌ 慢 (原生OS-SART) |
+| **算法丰富度** | ⚠️ 只有FDK/SIRT/CGLS | ✅ OS-SART/TV/ASD-POCS/Bisection |
+| **文档/研究支持** | 学术工具 | CERN/医学物理方向
 ## optimize #004 CBCT
 
 **OS-SART 用 SIRT3D 子集交替实现成功！** 🎉
