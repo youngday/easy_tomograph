@@ -291,7 +291,7 @@ results = [
 
 # 可视化
 print("\n生成可视化...")
-os.makedirs("img_3d_helical", exist_ok=True)
+os.makedirs("img_3d_axial", exist_ok=True)
 mid = nz // 2
 fig = plt.figure(figsize=(20, 10))
 gs = GridSpec(2, 5, figure=fig, hspace=0.35, wspace=0.3)
@@ -324,9 +324,9 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
     ax2.axis("off")
 plt.suptitle(f"ASTRA CUDA Cone-beam (32x512x512, {n_angles}角度, 20子集)\n{ts}",
              fontsize=12, fontweight="bold", y=0.98)
-plt.savefig("img_3d_helical/astra_cone_hybrid.png", dpi=150, bbox_inches="tight")
+plt.savefig("img_3d_axial/astra_cone_hybrid.png", dpi=150, bbox_inches="tight")
 plt.close()
-print("   => img_3d_helical/astra_cone_hybrid.png")
+print("   => img_3d_axial/astra_cone_hybrid.png")
 
 summary = {
     "backend": "ASTRA CUDA cone-beam (对齐TIGRE版)",
@@ -334,7 +334,7 @@ summary = {
     "results": {name: {"rmse": round(r,5), "ssim": round(s,4), "time_ms": round(t*1000,1)}
                 for name,t,r,s in results},
 }
-with open("img_3d_helical/astra_cone_hybrid_summary.json", "w") as f:
+with open("img_3d_axial/astra_cone_hybrid_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
-print("   => img_3d_helical/astra_cone_hybrid_summary.json")
+print("   => img_3d_axial/astra_cone_hybrid_summary.json")
 print("\nDone!")

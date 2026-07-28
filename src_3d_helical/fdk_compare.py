@@ -193,8 +193,8 @@ for i, k in enumerate(keys):
 
 plt.suptitle(f"ASTRA vs TIGRE FDK 锥束对比 ({nz}x{N}x{N}, {n_angles}角度)\nTomoPhantom Model 4",
              fontsize=13, fontweight='bold', y=0.98)
-os.makedirs("img_3d_helical", exist_ok=True)
-plt.savefig("img_3d_helical/fdk_compare.png", dpi=150, bbox_inches='tight')
+os.makedirs("img_3d_axial", exist_ok=True)
+plt.savefig("img_3d_axial/fdk_compare.png", dpi=150, bbox_inches='tight')
 plt.close()
-print("   => img_3d_helical/fdk_compare.png")
+print("   => img_3d_axial/fdk_compare.png")
 print("\nDone!")
