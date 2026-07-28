@@ -163,25 +163,31 @@ def tv_gradient(v, eps=1e-8):
 rec_fdk_noisy = algs.fdk(sino_noisy, geo, angles, filter="hann")
 rec_n = rec_fdk_noisy.copy()
 n_hist = []; best_n = {"rmse":1e9,"ssim":-1,"rec":None,"t":0,"n":0}
+prev_n = 0
 for ni in [1, 3, 5]:
-    t0=time(); rec_n=algs.ossart(sino_noisy,geo,angles,niter=ni,init=rec_n,blocksize=36,verbose=False)
+    dn = ni - prev_n
+    t0=time(); rec_n=algs.ossart(sino_noisy,geo,angles,niter=dn,init=rec_n,blocksize=36,verbose=False)
     t=time()-t0; r,s=calc_rmse(linear_scale(rec_n)),calc_ssim(linear_scale(rec_n))
     n_hist.append((ni,t,r,s))
     if r<best_n["rmse"]: best_n={"rmse":r,"ssim":s,"rec":linear_scale(rec_n),"t":t,"n":ni}
-    print(f"   有噪声 OS-SART x{ni:3d}: RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
+    print(f"   有噪声 OS-SART x{ni:3d} (+{dn}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
+    prev_n = ni
 print(f"   >> 最优: {best_n['n']}: RMSE={best_n['rmse']:.5f}")
 
 # TV-OS-SART
 beta=0.001
 rec_tv=rec_fdk_noisy.copy()
 tv_hist=[]; best_tv={"rmse":1e9,"ssim":-1,"rec":None,"t":0,"n":0}
+prev_n = 0
 for ni in [1, 3, 5]:
-    t0=time(); rec_tv=algs.ossart(sino_noisy,geo,angles,niter=ni,init=rec_tv,blocksize=36,verbose=False)
+    dn = ni - prev_n
+    t0=time(); rec_tv=algs.ossart(sino_noisy,geo,angles,niter=dn,init=rec_tv,blocksize=36,verbose=False)
     rec_tv=rec_tv-beta*tv_gradient(rec_tv)
     t=time()-t0; r,s=calc_rmse(linear_scale(rec_tv)),calc_ssim(linear_scale(rec_tv))
     tv_hist.append((ni,t,r,s))
     if r<best_tv["rmse"]: best_tv={"rmse":r,"ssim":s,"rec":linear_scale(rec_tv),"t":t,"n":ni}
-    print(f"   TV-OS-SART x{ni:3d}: RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
+    print(f"   TV-OS-SART x{ni:3d} (+{dn}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
+    prev_n = ni
 print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}")
 tv_improv = (1-best_tv['rmse']/best_n['rmse'])*100
 print(f"   TV 改善: {tv_improv:+.1f}%")
