@@ -31,10 +31,10 @@ sirt os-sart
 ## 3d cone hybrid
 sirt os-sart
 ### astra_cone_hybrid.py
-![astra_cone_hybrid](img_3d_out/astra_cone_hybrid.png)
+![astra_cone_hybrid](img_3d_axial/astra_cone_hybrid.png)
 ### tigre_cone_hybrid.py
 tigre_hybrid
-![tigre_cone_hybrid](img_3d_out/tigre_cone_hybrid.png)
+![tigre_cone_hybrid](img_3d_axial/tigre_cone_hybrid.png)
 
 ## install
 
