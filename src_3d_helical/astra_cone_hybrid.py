@@ -140,9 +140,9 @@ print(f"   RMSE={fdk_rmse:.5f}, SSIM={fdk_ssim:.4f}, {fdk_t*1000:.0f}ms")
 # B. OS-SART (SIRT3D 子集交替, warm-start)
 # ============================
 print("-" * 55)
-print("B. OS-SART (20子集, SIRT3D 交替, warm-start)")
+print("B. OS-SART (10子集, SIRT3D 交替, warm-start)")
 print("-" * 55)
-n_subsets = 20
+n_subsets = 10
 sub_size = n_angles // n_subsets
 subsets = []
 for i in range(n_subsets):

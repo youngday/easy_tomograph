@@ -4,7 +4,7 @@
     "N": 512,
     "nz": 32,
     "n_angles": 360,
-    "n_subsets": 20,
+    "n_subsets": 10,
     "DSO": 1000,
     "iso_det": 500
   },
@@ -12,22 +12,22 @@
     "Pure FDK": {
       "rmse": 0.00082,
       "ssim": 0.9953,
-      "time_ms": 412.7
+      "time_ms": 435.8
     },
     "OS-SART x10": {
-      "rmse": 0.0002,
+      "rmse": 0.00021,
       "ssim": 0.9997,
-      "time_ms": 8476.9
+      "time_ms": 5866.2
     },
-    "\u6709\u566a\u58f0 OS-SART x3": {
+    "\u6709\u566a\u58f0 OS-SART x5": {
       "rmse": 0.00433,
-      "ssim": 0.8509,
-      "time_ms": 3405.4
+      "ssim": 0.8511,
+      "time_ms": 2341.9
     },
     "TV-OS-SART x5": {
-      "rmse": 0.00123,
-      "ssim": 0.9894,
-      "time_ms": 3689.1
+      "rmse": 0.00126,
+      "ssim": 0.9889,
+      "time_ms": 2669.0
     }
   }
 }
