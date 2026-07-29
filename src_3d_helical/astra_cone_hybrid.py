@@ -1,7 +1,8 @@
 """
-FBP + IR 混合重建 (ASTRA 锥束 CBCT) — 与 TIGRE 对齐版
-======================================================
+螺旋 CT 混合重建 (ASTRA 锥束) — Helical CBCT
+=================================================
 FDK / 噪声OS-SART / TV-OS-SART
+螺距(pitch)=16 mm/rot, 360° 扫描
 """
 
 from time import time, strftime, localtime
@@ -22,7 +23,7 @@ except ImportError:
     exit(1)
 
 print("=" * 60)
-print("FBP + IR 混合重建  [锥束 CBCT | ASTRA CUDA]")
+print("螺旋(Helical) CBCT 混合重建  [ASTRA CUDA]")
 print("=" * 60)
 
 N = 512
@@ -49,22 +50,26 @@ dist_xy = np.sqrt((Xgrid - N/2)**2 + (Ygrid - N/2)**2)
 body_r = N * 0.42
 soft_mask_2d = np.clip((body_r + 20 - dist_xy) / 20, 0, 1)
 
-# ---- 锥束几何 (与 TIGRE 对齐) ----
+# ---- 螺旋(Helical)锥束几何 ----
 # 对齐: DSO=1000, iso-detector=500 → 总 source-detector=1500
 # voxel 各向同性 1.0mm, detector 各向同性 1.0mm
+# 螺旋扫描: 源/探测器在旋转同时沿 z 方向移动
 angles_rad = np.deg2rad(np.linspace(0, 360, n_angles, endpoint=False)).astype(np.float32)
 DSO, DSD_det = 1000.0, 500.0  # source-isocenter, isocenter-detector
 D = int(np.ceil(N * np.sqrt(2)))
 n_det_row, n_det_col = nz * 2, D
 det_pix = 1.0
+pitch = 16.0  # 螺距 (mm/圈), 螺距=1时床移=探测器z覆盖
 
 vectors = np.zeros((n_angles, 12), dtype=np.float32)
 for i, th in enumerate(angles_rad):
     c, s = np.cos(th), np.sin(th)
-    vectors[i, :3] = [DSO * s, -DSO * c, 0.0]          # source
-    vectors[i, 3:6] = [-DSD_det * s, DSD_det * c, 0.0]  # detector center
-    vectors[i, 6:9] = [det_pix * c, det_pix * s, 0.0]   # det u-vector
-    vectors[i, 9:12] = [0.0, 0.0, det_pix]               # det v-vector
+    # z 随角度线性变化: 形成螺旋轨迹, 中心化到 z∈[-pitch/2, pitch/2]
+    z_src = pitch * (th / (2 * np.pi) - 0.5)
+    vectors[i, :3] = [DSO * s, -DSO * c, z_src]          # source
+    vectors[i, 3:6] = [-DSD_det * s, DSD_det * c, z_src]  # detector center
+    vectors[i, 6:9] = [det_pix * c, det_pix * s, 0.0]     # det u-vector (xy平面)
+    vectors[i, 9:12] = [0.0, 0.0, det_pix]                # det v-vector (z方向)
 
 proj_geom = astra.create_proj_geom("cone_vec", n_det_row, n_det_col, vectors)
 vol_geom = astra.create_vol_geom(N, N, nz)
@@ -280,15 +285,15 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
     else:
         ax2.imshow(np.zeros_like(img), cmap="gray"); ax2.set_title("Reference", fontsize=8)
     ax2.axis("off")
-plt.suptitle(f"ASTRA CUDA Cone-beam (32x512x512, {n_angles}角度, 10子集)\n{ts}",
+plt.suptitle(f"ASTRA CUDA Helical Cone-beam (32x512x512, {n_angles}角度, pitch={pitch}mm, 10子集)\n{ts}",
              fontsize=12, fontweight="bold", y=0.98)
 plt.savefig("img_3d_helical/astra_cone_hybrid.png", dpi=150, bbox_inches="tight")
 plt.close()
 print("   => img_3d_helical/astra_cone_hybrid.png")
 
 summary = {
-    "backend": "ASTRA CUDA cone-beam (对齐TIGRE版)",
-    "config": {"N": N, "nz": nz, "n_angles": n_angles, "n_subsets": n_subsets, "DSO":1000, "iso_det":500},
+    "backend": "ASTRA CUDA helical cone-beam",
+    "config": {"N": N, "nz": nz, "n_angles": n_angles, "n_subsets": n_subsets, "DSO":1000, "iso_det":500, "pitch": pitch},
     "results": {name: {"rmse": round(r,5), "ssim": round(s,4), "time_ms": round(t*1000,1)}
                 for name,t,r,s in results},
 }

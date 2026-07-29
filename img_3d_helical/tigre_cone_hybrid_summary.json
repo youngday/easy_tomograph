@@ -1,5 +1,5 @@
 {
-  "backend": "TIGRE CUDA cone-beam (optimized v2)",
+  "backend": "TIGRE CUDA cone-beam",
   "config": {
     "N": 512,
     "nz": 32,
@@ -10,22 +10,17 @@
     "Pure FDK": {
       "rmse": 0.00084,
       "ssim": 0.9951,
-      "time_ms": 401.5
-    },
-    "OS-SART x10": {
-      "rmse": 0.00025,
-      "ssim": 0.9996,
-      "time_ms": 9418.9
+      "time_ms": 403.1
     },
     "\u6709\u566a\u58f0 OS-SART x1": {
       "rmse": 0.00186,
       "ssim": 0.9755,
-      "time_ms": 2337.8
+      "time_ms": 2351.3
     },
     "TV-OS-SART x10": {
       "rmse": 0.00076,
       "ssim": 0.996,
-      "time_ms": 9672.3
+      "time_ms": 10010.3
     }
   }
 }

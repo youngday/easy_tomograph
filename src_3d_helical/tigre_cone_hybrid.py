@@ -2,7 +2,8 @@
 FBP + IR 混合重建 (TIGRE 锥束 CBCT) — 优化版
 ===============================================
 FDK / 噪声OS-SART / TV-OS-SART
-优化: 统一体模(M4) + 加速blocksize + 图像打印时间
+优化: 统一体模(M4) + 加速blocksize
+注意: TIGRE 当前版本不支持 helical 模式, 使用 cone 模式
 """
 
 from time import time, strftime, localtime
@@ -55,7 +56,7 @@ soft_mask_2d = np.clip((body_r + 20 - dist_xy) / 20, 0, 1)
 angles = np.deg2rad(np.linspace(0, 360, n_angles, endpoint=False)).astype(np.float32)
 D = int(np.ceil(N * np.sqrt(2)))
 geo = tigre.geometry()
-geo.DSD = 1500.0  # 与 ASTRA 对齐: DSO(1000)+iso-det(500)=1500
+geo.DSD = 1500.0  # DSO(1000)+iso-det(500)=1500
 geo.DSO = 1000.0
 dVox = 1.0
 geo.nVoxel = np.array([nz, N, N])
@@ -97,6 +98,7 @@ def calc_ssim(rec):
         * (2 * sxy + c2)
         / ((mux**2 + muy**2 + c1) * (sx + sy + c2))
     )
+
 
 print("GPU 预热...")
 # blocksize=36 → 10 subsets (快2倍于18)
@@ -229,7 +231,7 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
     ax2.axis("off")
 
 plt.suptitle(
-    f"TIGRE CUDA Cone-beam  (512x512x32, {n_angles}角度, blocksize=36)\n{ts}",
+    f"TIGRE CUDA Cone-beam (512x512x32, {n_angles}角度, blocksize=36)\n{ts}",
     fontsize=12, fontweight="bold", y=0.98
 )
 plt.savefig("img_3d_helical/tigre_cone_hybrid.png", dpi=150, bbox_inches="tight")
@@ -237,7 +239,7 @@ plt.close()
 print("   => img_3d_helical/tigre_cone_hybrid.png")
 
 summary = {
-    "backend": "TIGRE CUDA cone-beam (optimized v2)",
+    "backend": "TIGRE CUDA cone-beam",
     "config": {"N": N, "nz": nz, "n_angles": n_angles, "blocksize": 36},
     "results": {
         name: {"rmse": round(r, 5), "ssim": round(s, 4), "time_ms": round(t * 1000, 1)}

@@ -1,33 +1,29 @@
 {
-  "backend": "ASTRA CUDA cone-beam (\u5bf9\u9f50TIGRE\u7248)",
+  "backend": "ASTRA CUDA helical cone-beam",
   "config": {
     "N": 512,
     "nz": 32,
     "n_angles": 360,
     "n_subsets": 10,
     "DSO": 1000,
-    "iso_det": 500
+    "iso_det": 500,
+    "pitch": 16.0
   },
   "results": {
     "Pure FDK": {
-      "rmse": 0.00082,
-      "ssim": 0.9953,
-      "time_ms": 383.2
-    },
-    "OS-SART x10": {
-      "rmse": 0.00021,
-      "ssim": 0.9997,
-      "time_ms": 5601.6
+      "rmse": 0.00125,
+      "ssim": 0.9891,
+      "time_ms": 384.7
     },
     "\u6709\u566a\u58f0 OS-SART x5": {
-      "rmse": 0.00433,
-      "ssim": 0.8511,
-      "time_ms": 2267.1
+      "rmse": 0.00438,
+      "ssim": 0.8469,
+      "time_ms": 2354.5
     },
     "TV-OS-SART x10": {
       "rmse": 0.00079,
       "ssim": 0.9957,
-      "time_ms": 6421.5
+      "time_ms": 6747.4
     }
   }
 }
