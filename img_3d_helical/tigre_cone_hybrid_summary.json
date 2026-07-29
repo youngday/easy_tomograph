@@ -1,26 +1,27 @@
 {
-  "backend": "TIGRE CUDA cone-beam",
+  "backend": "TIGRE CUDA helical cone-beam (offOrigin-z)",
   "config": {
     "N": 512,
     "nz": 32,
     "n_angles": 360,
-    "blocksize": 36
+    "blocksize": 36,
+    "pitch": 16.0
   },
   "results": {
     "Pure FDK": {
       "rmse": 0.00084,
       "ssim": 0.9951,
-      "time_ms": 403.1
+      "time_ms": 406.0
     },
     "\u6709\u566a\u58f0 OS-SART x1": {
       "rmse": 0.00186,
       "ssim": 0.9755,
-      "time_ms": 2351.3
+      "time_ms": 2228.6
     },
     "TV-OS-SART x10": {
       "rmse": 0.00076,
       "ssim": 0.996,
-      "time_ms": 10010.3
+      "time_ms": 9263.4
     }
   }
 }

@@ -1,9 +1,8 @@
 """
-FBP + IR 混合重建 (TIGRE 锥束 CBCT) — 优化版
+螺旋 CT 混合重建 (TIGRE 锥束) — Helical CBCT
 ===============================================
 FDK / 噪声OS-SART / TV-OS-SART
-优化: 统一体模(M4) + 加速blocksize
-注意: TIGRE 当前版本不支持 helical 模式, 使用 cone 模式
+优化: 通过 offOrigin 每角度 z 偏移实现螺旋轨迹
 """
 
 from time import time, strftime, localtime
@@ -25,7 +24,7 @@ except ImportError:
     exit(1)
 
 print("=" * 60)
-print("FBP + IR 混合重建对比  [锥束 CBCT | TIGRE CUDA 优化]")
+print("螺旋(Helical) CBCT 混合重建对比  [TIGRE CUDA 优化]")
 print("=" * 60)
 
 N = 512
@@ -65,8 +64,12 @@ geo.dVoxel = np.array([dVox, dVox, dVox])
 geo.nDetector = np.array([nz * 2, D])  # (v, u)
 geo.dDetector = np.array([1.0, 1.0])   # 各向同性 1.0mm
 geo.sDetector = geo.nDetector * geo.dDetector
-geo.offOrigin = np.array([0, 0, 0])
 geo.offDetector = np.array([0, 0])
+pitch = 16.0  # 螺距 (mm/圈)
+# 通过 per-projection offOrigin z 偏移实现螺旋轨迹
+z_helical = pitch * (angles / (2 * np.pi) - 0.5)
+geo.offOrigin = np.zeros((n_angles, 3), dtype=np.float32)
+geo.offOrigin[:, 2] = z_helical
 geo.mode = "cone"
 geo.filter = None
 
@@ -231,7 +234,7 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
     ax2.axis("off")
 
 plt.suptitle(
-    f"TIGRE CUDA Cone-beam (512x512x32, {n_angles}角度, blocksize=36)\n{ts}",
+    f"TIGRE CUDA Helical Cone-beam (512x512x32, {n_angles}角度, pitch={pitch}mm, blocksize=36)\n{ts}",
     fontsize=12, fontweight="bold", y=0.98
 )
 plt.savefig("img_3d_helical/tigre_cone_hybrid.png", dpi=150, bbox_inches="tight")
@@ -239,8 +242,8 @@ plt.close()
 print("   => img_3d_helical/tigre_cone_hybrid.png")
 
 summary = {
-    "backend": "TIGRE CUDA cone-beam",
-    "config": {"N": N, "nz": nz, "n_angles": n_angles, "blocksize": 36},
+    "backend": "TIGRE CUDA helical cone-beam (offOrigin-z)",
+    "config": {"N": N, "nz": nz, "n_angles": n_angles, "blocksize": 36, "pitch": pitch},
     "results": {
         name: {"rmse": round(r, 5), "ssim": round(s, 4), "time_ms": round(t * 1000, 1)}
         for name, t, r, s in results

@@ -211,7 +211,7 @@ print(f"   >> 最优: x{best_n['n']}: RMSE={best_n['rmse']:.5f}")
 best_tv = {"rmse": 1e9}
 rec_tv = rec_fdk_n.copy()
 prev_n = 0
-for ni, beta in zip([1, 3, 5, 10], [0.003, 0.002, 0.001, 0.0005]):
+for ni, beta in zip([1, 3, 5], [0.003, 0.002, 0.001]):
     dn = ni - prev_n
     t0 = time()
     for _ in range(dn):
