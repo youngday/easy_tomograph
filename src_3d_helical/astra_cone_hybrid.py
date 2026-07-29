@@ -1,7 +1,7 @@
 """
 FBP + IR 混合重建 (ASTRA 锥束 CBCT) — 与 TIGRE 对齐版
 ======================================================
-FDK / OS-SART / 噪声OS-SART / TV-OS-SART
+FDK / 噪声OS-SART / TV-OS-SART
 """
 
 from time import time, strftime, localtime
@@ -137,55 +137,17 @@ fdk_t = time() - t0; fdk_rmse = calc_rmse(fdk_rec); fdk_ssim = calc_ssim(fdk_rec
 print(f"   RMSE={fdk_rmse:.5f}, SSIM={fdk_ssim:.4f}, {fdk_t*1000:.0f}ms")
 
 # ============================
-# B. OS-SART (SIRT3D 子集交替, warm-start)
+# B. 噪声/伪影 + TV-OS-SART
 # ============================
-print("-" * 55)
-print("B. OS-SART (10子集, SIRT3D 交替, warm-start)")
-print("-" * 55)
 n_subsets = 10
 sub_size = n_angles // n_subsets
-subsets = []
-for i in range(n_subsets):
-    idx = slice(i * sub_size, (i + 1) * sub_size)
-    sv = vectors[idx].copy()
-    pg = astra.create_proj_geom("cone_vec", n_det_row, n_det_col, sv)
-    ss = np.ascontiguousarray(sino[:, idx, :])
-    sid_sub = astra.data3d.create("-sino", pg, ss)
-    subsets.append((pg, sid_sub))
-
-best_c = {"rmse": 1e9}
-rec_os = fdk_raw.copy()
-prev_n = 0
-for n_iter in [1, 3, 5, 10]:
-    dn = n_iter - prev_n
-    t0 = time()
-    for _ in range(dn):
-        for _, sid_sub in subsets:
-            rid_os = astra.data3d.create("-vol", vol_geom, data=rec_os.astype(np.float32))
-            c = astra.astra_dict("SIRT3D_CUDA")
-            c["ProjectionDataId"] = sid_sub; c["ReconstructionDataId"] = rid_os
-            c["option"] = {"GPUindex": 0}
-            a = astra.algorithm.create(c); astra.algorithm.run(a, 1)
-            rec_os = astra.data3d.get(rid_os).copy()
-            astra.algorithm.delete(a); astra.data3d.delete(rid_os)
-    t = time() - t0
-    r, s = calc_rmse(linear_scale(rec_os)), calc_ssim(linear_scale(rec_os))
-    if r < best_c["rmse"]: best_c = {"rmse": r, "ssim": s, "rec": linear_scale(rec_os), "t": t, "n": n_iter}
-    print(f"   x{n_iter:3d} (+{dn}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-    prev_n = n_iter
-for _, sid in subsets: astra.data3d.delete(sid)
-print(f"   >> 最优: OS-SART x{best_c['n']}: RMSE={best_c['rmse']:.5f}")
-
-# ============================
-# C. 噪声/伪影 + TV-OS-SART
-# ============================
-print("-" * 55)
-print("C. 噪声/伪影 + TV-OS-SART")
-print("-" * 55)
 
 from ct_noise import add_artifacts
 np.random.seed(2024)
 sino_noisy = add_artifacts(sino, dose_level=0.5, hardening=False, rings=True, scatter=False)
+
+# 占位: clean OS-SART 已移除
+best_c = {"rmse": 1e9}
 
 # TV 梯度算子
 def tv_gradient(v, eps=1e-8):
@@ -268,22 +230,20 @@ tv_improv = (1 - best_tv['rmse']/best_n['rmse']) * 100
 print(f"   TV 改善: {tv_improv:+.1f}%")
 
 # ============================
-# D. 汇总
+# C. 汇总
 # ============================
 print("\n" + "=" * 70)
 print("汇总对比 (32x512x512, 360角度, 10子集)")
 print("=" * 70)
 print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'vsFDK':>10s}")
 print("-" * 72)
-c_imp = f"{(1 - best_c['rmse'] / fdk_rmse) * 100:+.1f}%"
+c_imp = f"{(1 - best_n['rmse'] / fdk_rmse) * 100:+.1f}%"
 print(f"{'Pure FDK':30s} {fdk_t*1000:>8.0f} ms  {fdk_rmse:>10.5f}  {fdk_ssim:>8.4f} {'-':>10s}")
-print(f"{'OS-SART x'+str(best_c['n']):30s} {best_c['t']*1000:>8.0f} ms  {best_c['rmse']:>10.5f}  {best_c['ssim']:>8.4f} {c_imp:>10s}")
-print(f"{'有噪声 OS-SART x'+str(best_n['n']):30s} {best_n['t']*1000:>8.0f} ms  {best_n['rmse']:>10.5f}  {best_n['ssim']:>8.4f} {'':>10s}")
+print(f"{'有噪声 OS-SART x'+str(best_n['n']):30s} {best_n['t']*1000:>8.0f} ms  {best_n['rmse']:>10.5f}  {best_n['ssim']:>8.4f} {c_imp:>10s}")
 print(f"{'TV-OS-SART x'+str(best_tv['n']):30s} {best_tv['t']*1000:>8.0f} ms  {best_tv['rmse']:>10.5f}  {best_tv['ssim']:>8.4f} {'':>10s}")
 
 results = [
     ("Pure FDK", fdk_t, fdk_rmse, fdk_ssim),
-    ("OS-SART x"+str(best_c["n"]), best_c["t"], best_c["rmse"], best_c["ssim"]),
     ("有噪声 OS-SART x"+str(best_n["n"]), best_n["t"], best_n["rmse"], best_n["ssim"]),
     ("TV-OS-SART x"+str(best_tv["n"]), best_tv["t"], best_tv["rmse"], best_tv["ssim"]),
 ]
@@ -293,13 +253,12 @@ print("\n生成可视化...")
 os.makedirs("img_3d_helical", exist_ok=True)
 mid = nz // 2
 fig = plt.figure(figsize=(20, 10))
-gs = GridSpec(2, 5, figure=fig, hspace=0.35, wspace=0.3)
+gs = GridSpec(2, 4, figure=fig, hspace=0.35, wspace=0.3)
 ts = strftime("%Y-%m-%d %H:%M:%S", localtime())
 
 titles_upper = [
     ("Ground Truth", vol_gt[mid], None, None, None, None),
     ("FDK", fdk_rec[mid], fdk_rmse, fdk_ssim, fdk_t, None),
-    ("OS-SART", best_c["rec"][mid], best_c["rmse"], best_c["ssim"], best_c["t"], best_c["n"]),
     ("Noisy OS-SART", best_n["rec"][mid], best_n["rmse"], best_n["ssim"], best_n["t"], best_n["n"]),
     ("TV-OS-SART", best_tv["rec"][mid], best_tv["rmse"], best_tv["ssim"], best_tv["t"], best_tv["n"]),
 ]

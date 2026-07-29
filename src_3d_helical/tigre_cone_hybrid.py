@@ -1,7 +1,7 @@
 """
 FBP + IR 混合重建 (TIGRE 锥束 CBCT) — 优化版
 ===============================================
-FDK / OS-SART (warm-start) / TV-OS-SART
+FDK / 噪声OS-SART / TV-OS-SART
 优化: 统一体模(M4) + 加速blocksize + 图像打印时间
 """
 
@@ -116,31 +116,11 @@ fdk_rmse = calc_rmse(fdk_rec)
 fdk_ssim = calc_ssim(fdk_rec)
 print(f"   RMSE={fdk_rmse:.5f}, SSIM={fdk_ssim:.4f}, {fdk_t * 1000:.0f}ms")
 
-# ========== B. OS-SART (clean, warm-start from FDK) ==========
-print("-" * 55)
-print("B. FBP + OS-SART (warm-start, blocksize=36)")
-print("-" * 55)
-c_hist = []
+# ========== B. 噪声/伪影对比 (OS-SART vs TV-OS-SART) ==========
+# clean OS-SART 已移除
 best_c = {"rmse": 1e9, "ssim": -1, "rec": None, "t": 0, "n": 0}
-rec_c = rec_fdk.copy()
-prev_n = 0
-for n_iter in [1, 3, 5, 10]:
-    dn = n_iter - prev_n
-    t0 = time()
-    rec_c = algs.ossart(sino, geo, angles, niter=dn, init=rec_c, blocksize=36, verbose=False)
-    t = time() - t0
-    r = calc_rmse(linear_scale(rec_c))
-    s = calc_ssim(linear_scale(rec_c))
-    c_hist.append((n_iter, t, r, s))
-    if r < best_c["rmse"]:
-        best_c = {"rmse": r, "ssim": s, "rec": linear_scale(rec_c), "t": t, "n": n_iter}
-    print(f"   x{n_iter:3d} (+{dn}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-    prev_n = n_iter
-print(f"   >> 最优: OS-SART x{best_c['n']}: RMSE={best_c['rmse']:.5f}")
-
-# ========== C. 噪声/伪影对比 (OS-SART vs TV-OS-SART) ==========
 print("-" * 55)
-print("C. 噪声/伪影对比 (量子噪声 + 环伪影)")
+print("B. 噪声/伪影对比 (量子噪声 + 环伪影)")
 print("-" * 55)
 print("   比较 OS-SART 与 TV-OS-SART 的鲁棒性")
 
@@ -191,21 +171,19 @@ print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}")
 tv_improv = (1-best_tv['rmse']/best_n['rmse'])*100
 print(f"   TV 改善: {tv_improv:+.1f}%")
 
-# ========== D. 汇总 ==========
+# ========== C. 汇总 ==========
 print("\n" + "=" * 70)
 print("汇总对比 (32x512x512, 360角度, blocksize=36)")
 print("=" * 70)
 print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'vsFDK':>10s}")
 print("-" * 72)
-c_imp = f"{(1 - best_c['rmse'] / fdk_rmse) * 100:+.1f}%"
+c_imp = f"{(1 - best_n['rmse'] / fdk_rmse) * 100:+.1f}%"
 print(f"{'Pure FDK':30s} {fdk_t * 1000:>8.0f} ms  {fdk_rmse:>10.5f}  {fdk_ssim:>8.4f} {'-':>10s}")
-print(f"{'OS-SART x' + str(best_c['n']):30s} {best_c['t'] * 1000:>8.0f} ms  {best_c['rmse']:>10.5f}  {best_c['ssim']:>8.4f} {c_imp:>10s}")
-print(f"{'有噪声 OS-SART x'+str(best_n['n']):30s} {best_n['t']*1000:>8.0f} ms  {best_n['rmse']:>10.5f}  {best_n['ssim']:>8.4f} {'':>10s}")
+print(f"{'有噪声 OS-SART x'+str(best_n['n']):30s} {best_n['t']*1000:>8.0f} ms  {best_n['rmse']:>10.5f}  {best_n['ssim']:>8.4f} {c_imp:>10s}")
 print(f"{'TV-OS-SART x'+str(best_tv['n']):30s} {best_tv['t']*1000:>8.0f} ms  {best_tv['rmse']:>10.5f}  {best_tv['ssim']:>8.4f} {'':>10s}")
 
 results = [
     ("Pure FDK", fdk_t, fdk_rmse, fdk_ssim),
-    ("OS-SART x" + str(best_c["n"]), best_c["t"], best_c["rmse"], best_c["ssim"]),
     ("有噪声 OS-SART x" + str(best_n["n"]), best_n["t"], best_n["rmse"], best_n["ssim"]),
     ("TV-OS-SART x" + str(best_tv["n"]), best_tv["t"], best_tv["rmse"], best_tv["ssim"]),
 ]
@@ -215,7 +193,7 @@ print("\n生成可视化...")
 os.makedirs("img_3d_helical", exist_ok=True)
 mid = nz // 2
 fig = plt.figure(figsize=(18, 10))
-gs = GridSpec(2, 5, figure=fig, hspace=0.35, wspace=0.3)
+gs = GridSpec(2, 4, figure=fig, hspace=0.35, wspace=0.3)
 
 ts = strftime("%Y-%m-%d %H:%M:%S", localtime())
 
@@ -223,7 +201,6 @@ ts = strftime("%Y-%m-%d %H:%M:%S", localtime())
 titles_upper = [
     ("Ground Truth", vol_gt[mid], None, None, None, None),
     ("FDK", fdk_rec[mid], fdk_rmse, fdk_ssim, fdk_t, None),
-    ("OS-SART", best_c["rec"][mid], best_c["rmse"], best_c["ssim"], best_c["t"], best_c["n"]),
     ("Noisy OS-SART", best_n["rec"][mid], best_n["rmse"], best_n["ssim"], best_n["t"], best_n["n"]),
     ("TV-OS-SART", best_tv["rec"][mid], best_tv["rmse"], best_tv["ssim"], best_tv["t"], best_tv["n"]),
 ]
