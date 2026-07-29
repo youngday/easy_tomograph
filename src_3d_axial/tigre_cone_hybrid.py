@@ -212,7 +212,7 @@ results = [
 
 # ========== 可视化 ==========
 print("\n生成可视化...")
-os.makedirs("img_3d_helical", exist_ok=True)
+os.makedirs("img_3d_axial", exist_ok=True)
 mid = nz // 2
 fig = plt.figure(figsize=(18, 10))
 gs = GridSpec(2, 5, figure=fig, hspace=0.35, wspace=0.3)
@@ -255,9 +255,9 @@ plt.suptitle(
     f"TIGRE CUDA Cone-beam  (512x512x32, {n_angles}角度, blocksize=36)\n{ts}",
     fontsize=12, fontweight="bold", y=0.98
 )
-plt.savefig("img_3d_helical/tigre_cone_hybrid.png", dpi=150, bbox_inches="tight")
+plt.savefig("img_3d_axial/tigre_cone_hybrid.png", dpi=150, bbox_inches="tight")
 plt.close()
-print("   => img_3d_helical/tigre_cone_hybrid.png")
+print("   => img_3d_axial/tigre_cone_hybrid.png")
 
 summary = {
     "backend": "TIGRE CUDA cone-beam (optimized v2)",
@@ -267,7 +267,7 @@ summary = {
         for name, t, r, s in results
     },
 }
-with open("img_3d_helical/tigre_cone_hybrid_summary.json", "w") as f:
+with open("img_3d_axial/tigre_cone_hybrid_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
-print("   => img_3d_helical/tigre_cone_hybrid_summary.json")
+print("   => img_3d_axial/tigre_cone_hybrid_summary.json")
 print("\nDone!")

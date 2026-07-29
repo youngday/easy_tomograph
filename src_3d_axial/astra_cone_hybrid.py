@@ -240,12 +240,11 @@ for ni in [1, 3, 5]:
     prev_n = ni
 print(f"   >> 最优: x{best_n['n']}: RMSE={best_n['rmse']:.5f}")
 
-# TV-OS-SART
-beta = 0.001
+# TV-OS-SART (β scheduling: high→low for denoise→detail)
 best_tv = {"rmse": 1e9}
 rec_tv = rec_fdk_n.copy()
 prev_n = 0
-for ni in [1, 3, 5]:
+for ni, beta in zip([1, 3, 5, 10], [0.003, 0.002, 0.001, 0.0005]):
     dn = ni - prev_n
     t0 = time()
     for _ in range(dn):
@@ -272,7 +271,7 @@ print(f"   TV 改善: {tv_improv:+.1f}%")
 # D. 汇总
 # ============================
 print("\n" + "=" * 70)
-print("汇总对比 (32x512x512, 360角度, 20子集)")
+print("汇总对比 (32x512x512, 360角度, 10子集)")
 print("=" * 70)
 print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'vsFDK':>10s}")
 print("-" * 72)
@@ -322,7 +321,7 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
     else:
         ax2.imshow(np.zeros_like(img), cmap="gray"); ax2.set_title("Reference", fontsize=8)
     ax2.axis("off")
-plt.suptitle(f"ASTRA CUDA Cone-beam (32x512x512, {n_angles}角度, 20子集)\n{ts}",
+plt.suptitle(f"ASTRA CUDA Cone-beam (32x512x512, {n_angles}角度, 10子集)\n{ts}",
              fontsize=12, fontweight="bold", y=0.98)
 plt.savefig("img_3d_axial/astra_cone_hybrid.png", dpi=150, bbox_inches="tight")
 plt.close()
