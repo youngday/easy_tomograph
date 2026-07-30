@@ -13,17 +13,17 @@
     "Pure FDK": {
       "rmse": 0.00125,
       "ssim": 0.9891,
-      "time_ms": 403.3
+      "time_ms": 379.9
     },
     "OS-SART x5": {
       "rmse": 0.00438,
       "ssim": 0.8469,
-      "time_ms": 1266.0
+      "time_ms": 1135.8
     },
     "TV-OS-SART x10": {
       "rmse": 0.00109,
       "ssim": 0.9917,
-      "time_ms": 3861.8
+      "time_ms": 3530.2
     }
   },
   "z_profile": {

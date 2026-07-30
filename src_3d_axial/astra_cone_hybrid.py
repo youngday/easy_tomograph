@@ -108,6 +108,18 @@ def calc_ssim(rec):
         / ((mux**2 + muy**2 + c1) * (sx + sy + c2))
     )
 
+def calc_z_profile(rec):
+    """沿 z 方向逐片 RMSE"""
+    z_rmse = []
+    for z in range(rec.shape[0]):
+        mask_z = vol_gt[z] > 0.001
+        if mask_z.sum() > 100:
+            e = vol_gt[z][mask_z] - rec[z][mask_z]
+            z_rmse.append(np.sqrt(np.mean(e**2)))
+        else:
+            z_rmse.append(0.0)
+    return np.array(z_rmse)
+
 # GPU 预热
 print("GPU 预热...")
 sid_w = astra.data3d.create("-sino", proj_geom, sino)
@@ -134,7 +146,9 @@ fdk_raw = astra.data3d.get(rid_fdk).copy()
 astra.algorithm.delete(a); astra.data3d.delete(rid_fdk); astra.data3d.delete(sid_fdk)
 fdk_rec = linear_scale(fdk_raw)
 fdk_t = time() - t0; fdk_rmse = calc_rmse(fdk_rec); fdk_ssim = calc_ssim(fdk_rec)
+fdk_zprof = calc_z_profile(fdk_rec)
 print(f"   RMSE={fdk_rmse:.5f}, SSIM={fdk_ssim:.4f}, {fdk_t*1000:.0f}ms")
+print(f"   z-profile: mean={fdk_zprof.mean():.5f}, max={fdk_zprof.max():.5f}")
 
 # ============================
 # B. OS-SART (SIRT3D 子集交替, warm-start)
@@ -174,7 +188,9 @@ for n_iter in [1, 3, 5, 10]:
     print(f"   x{n_iter:3d} (+{dn}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
     prev_n = n_iter
 for _, sid in subsets: astra.data3d.delete(sid)
+best_c_zprof = calc_z_profile(best_c['rec'])
 print(f"   >> 最优: OS-SART x{best_c['n']}: RMSE={best_c['rmse']:.5f}")
+print(f"   z-profile: mean={best_c_zprof.mean():.5f}, max={best_c_zprof.max():.5f}")
 
 # ============================
 # C. 噪声/伪影 + TV-OS-SART
@@ -266,6 +282,10 @@ for _, sid in subsets_n: astra.data3d.delete(sid)
 print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}")
 tv_improv = (1 - best_tv['rmse']/best_n['rmse']) * 100
 print(f"   TV 改善: {tv_improv:+.1f}%")
+best_n_zprof = calc_z_profile(best_n['rec'])
+print(f"   有噪声OS-SART z-profile: mean={best_n_zprof.mean():.5f}, max={best_n_zprof.max():.5f}")
+best_tv_zprof = calc_z_profile(best_tv['rec'])
+print(f"   TV-OS-SART z-profile: mean={best_tv_zprof.mean():.5f}, max={best_tv_zprof.max():.5f}")
 
 # ============================
 # D. 汇总
@@ -273,13 +293,12 @@ print(f"   TV 改善: {tv_improv:+.1f}%")
 print("\n" + "=" * 70)
 print("汇总对比 (32x512x512, 360角度, 10子集)")
 print("=" * 70)
-print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'vsFDK':>10s}")
+print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'z-RMSE':>10s}")
 print("-" * 72)
-c_imp = f"{(1 - best_c['rmse'] / fdk_rmse) * 100:+.1f}%"
-print(f"{'Pure FDK':30s} {fdk_t*1000:>8.0f} ms  {fdk_rmse:>10.5f}  {fdk_ssim:>8.4f} {'-':>10s}")
-print(f"{'OS-SART x'+str(best_c['n']):30s} {best_c['t']*1000:>8.0f} ms  {best_c['rmse']:>10.5f}  {best_c['ssim']:>8.4f} {c_imp:>10s}")
-print(f"{'有噪声 OS-SART x'+str(best_n['n']):30s} {best_n['t']*1000:>8.0f} ms  {best_n['rmse']:>10.5f}  {best_n['ssim']:>8.4f} {'':>10s}")
-print(f"{'TV-OS-SART x'+str(best_tv['n']):30s} {best_tv['t']*1000:>8.0f} ms  {best_tv['rmse']:>10.5f}  {best_tv['ssim']:>8.4f} {'':>10s}")
+print(f"{'Pure FDK':30s} {fdk_t*1000:>8.0f} ms  {fdk_rmse:>10.5f}  {fdk_ssim:>8.4f} {fdk_zprof.mean():>10.5f}")
+print(f"{'OS-SART x'+str(best_c['n']):30s} {best_c['t']*1000:>8.0f} ms  {best_c['rmse']:>10.5f}  {best_c['ssim']:>8.4f} {best_c_zprof.mean():>10.5f}")
+print(f"{'有噪声 OS-SART x'+str(best_n['n']):30s} {best_n['t']*1000:>8.0f} ms  {best_n['rmse']:>10.5f}  {best_n['ssim']:>8.4f} {best_n_zprof.mean():>10.5f}")
+print(f"{'TV-OS-SART x'+str(best_tv['n']):30s} {best_tv['t']*1000:>8.0f} ms  {best_tv['rmse']:>10.5f}  {best_tv['ssim']:>8.4f} {best_tv_zprof.mean():>10.5f}")
 
 results = [
     ("Pure FDK", fdk_t, fdk_rmse, fdk_ssim),
@@ -292,8 +311,8 @@ results = [
 print("\n生成可视化...")
 os.makedirs("img_3d_axial", exist_ok=True)
 mid = nz // 2
-fig = plt.figure(figsize=(20, 10))
-gs = GridSpec(2, 5, figure=fig, hspace=0.35, wspace=0.3)
+fig = plt.figure(figsize=(22, 14))
+gs = GridSpec(3, 5, figure=fig, hspace=0.45, wspace=0.3)
 ts = strftime("%Y-%m-%d %H:%M:%S", localtime())
 
 titles_upper = [
@@ -321,6 +340,20 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
     else:
         ax2.imshow(np.zeros_like(img), cmap="gray"); ax2.set_title("Reference", fontsize=8)
     ax2.axis("off")
+# z-profile 图 (第3行)
+z_coord = np.arange(nz)
+ax_z = fig.add_subplot(gs[2, :])
+for zp, zl, zc in zip(
+    [fdk_zprof, best_c_zprof, best_n_zprof, best_tv_zprof],
+    ["FDK", "OS-SART", "Noisy OS-SART", "TV-OS-SART"],
+    ["orange", "green", "blue", "red"]
+):
+    ax_z.plot(z_coord, zp, 'o-', label=zl, color=zc, markersize=3)
+ax_z.set_xlabel("z slice", fontsize=9)
+ax_z.set_ylabel("RMSE per slice", fontsize=9)
+ax_z.legend(fontsize=8)
+ax_z.set_title("z-profile: 沿 z 方向逐片 RMSE", fontsize=10)
+ax_z.grid(True, alpha=0.3)
 plt.suptitle(f"ASTRA CUDA Cone-beam (32x512x512, {n_angles}角度, 10子集)\n{ts}",
              fontsize=12, fontweight="bold", y=0.98)
 plt.savefig("img_3d_axial/astra_cone_hybrid.png", dpi=150, bbox_inches="tight")
@@ -328,10 +361,16 @@ plt.close()
 print("   => img_3d_axial/astra_cone_hybrid.png")
 
 summary = {
-    "backend": "ASTRA CUDA cone-beam (对齐TIGRE版)",
+    "backend": "ASTRA CUDA cone-beam",
     "config": {"N": N, "nz": nz, "n_angles": n_angles, "n_subsets": n_subsets, "DSO":1000, "iso_det":500},
     "results": {name: {"rmse": round(r,5), "ssim": round(s,4), "time_ms": round(t*1000,1)}
                 for name,t,r,s in results},
+    "z_profile": {
+        "FDK": [round(x,5) for x in fdk_zprof.tolist()],
+        "OS-SART x"+str(best_c["n"]): [round(x,5) for x in best_c_zprof.tolist()],
+        "有噪声 OS-SART x"+str(best_n["n"]): [round(x,5) for x in best_n_zprof.tolist()],
+        "TV-OS-SART x"+str(best_tv["n"]): [round(x,5) for x in best_tv_zprof.tolist()],
+    }
 }
 with open("img_3d_axial/astra_cone_hybrid_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
