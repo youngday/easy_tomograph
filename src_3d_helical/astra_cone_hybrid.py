@@ -1,8 +1,8 @@
 """
 螺旋 CT 混合重建 (ASTRA 锥束) — Helical CBCT 优化版
 =====================================================
-FDK / 有噪声 OS-SART / TV-OS-SART
-优化: Nesterov 动量加速 + 自适应 TV β + z-profile 评估
+FDK / Hybrid IR / TV-OS-SART
+优化: 自适应 TV β + z-profile 评估
 螺距(pitch)=16 mm/rot, 360° 扫描
 """
 
@@ -157,9 +157,7 @@ fdk_zprof = calc_z_profile(fdk_rec)
 print(f"   RMSE={fdk_rmse:.5f}, SSIM={fdk_ssim:.4f}, {fdk_t*1000:.0f}ms")
 print(f"   z-profile: mean={fdk_zprof.mean():.5f}, max={fdk_zprof.max():.5f}, min={fdk_zprof.min():.5f}")
 
-# ============================
-# B. 噪声/伪影 + 加速 OS-SART / TV-OS-SART
-# ============================
+# ---- 有噪声数据 + 通用加速设施 ----
 n_subsets = 10
 sub_size = n_angles // n_subsets
 
@@ -226,29 +224,9 @@ def fast_ossart(rec, n_step=1):
             rec = astra.data3d.get(rid).copy()
     return rec
 
-# ===== B1. OS-SART baseline (加速版) =====
+# ===== C. TV-OS-SART (加速版 + 各向异性) =====
 print("-" * 55)
-print("B1. OS-SART (加速: 复用ASTRA对象)")
-print("-" * 55)
-best_n = {"rmse": 1e9}
-rec_n = rec_fdk_n.copy()
-prev_n = 0
-for ni in [1, 3, 5]:
-    dn = ni - prev_n
-    t0 = time()
-    rec_n = fast_ossart(rec_n, dn)
-    t = time() - t0
-    r, s = calc_rmse(linear_scale(rec_n)), calc_ssim(linear_scale(rec_n))
-    if r < best_n["rmse"]:
-        best_n = {"rmse": r, "ssim": s, "rec": linear_scale(rec_n), "t": t, "n": ni}
-    print(f"   OS-SART x{ni:3d}: RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-    prev_n = ni
-print(f"   >> 最优: x{best_n['n']}: RMSE={best_n['rmse']:.5f}")
-best_n_zprof = calc_z_profile(best_n["rec"])
-
-# ===== B2. TV-OS-SART (加速版 + 各向异性) =====
-print("-" * 55)
-print("B2. TV-OS-SART (加速: 复用ASTRA对象 + 各向异性TV)")
+print("C. TV-OS-SART (加速: 复用ASTRA对象 + 各向异性TV)")
 print("-" * 55)
 
 best_tv = {"rmse": 1e9}
@@ -278,18 +256,38 @@ for ni, beta in zip(tv_niters, tv_betas):
     prev_n = ni
 
 # 清理 ASTRA 对象
-for pg, sid, rid, alg in subset_algs:
-    astra.algorithm.delete(alg)
-    astra.data3d.delete(rid)
-    astra.data3d.delete(sid)
 print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}")
-tv_improv = (1 - best_tv['rmse']/best_n['rmse']) * 100
+tv_improv = (1 - best_tv['rmse']/fdk_rmse) * 100
 print(f"   TV 改善: {tv_improv:+.1f}%")
 best_tv_zprof = calc_z_profile(best_tv["rec"])
 print(f"   z-profile: mean={best_tv_zprof.mean():.5f}, max={best_tv_zprof.max():.5f}")
 
 # ============================
-# C. 汇总
+# B. Fast Hybrid IR (OS3+TV1+FDK50%)
+# ============================
+print("-" * 55)
+print("B. Hybrid IR (OS-SART×3 + TV×1 + FDK混合 50%)")
+print("-" * 55)
+t0 = time()
+rec_hybrid = rec_fdk_n.copy()
+rec_hybrid = fast_ossart(rec_hybrid, 3)
+rec_hybrid = rec_hybrid - 0.003 * tv_gradient(rec_hybrid, w_z=1.5)
+rec_hybrid = 0.5 * rec_hybrid + 0.5 * rec_fdk_n
+t_hybrid = time() - t0
+r_hybrid, s_hybrid = calc_rmse(linear_scale(rec_hybrid)), calc_ssim(linear_scale(rec_hybrid))
+best_hybrid = {"rec": linear_scale(rec_hybrid), "rmse": r_hybrid, "ssim": s_hybrid, "t": t_hybrid}
+print(f"   Hybrid IR: RMSE={r_hybrid:.5f}, SSIM={s_hybrid:.4f}, {t_hybrid*1000:.0f}ms")
+hybrid_zprof = calc_z_profile(best_hybrid["rec"])
+print(f"   z-profile: mean={hybrid_zprof.mean():.5f}, max={hybrid_zprof.max():.5f}")
+
+# 清理 ASTRA 对象
+for pg, sid, rid, alg in subset_algs:
+    astra.algorithm.delete(alg)
+    astra.data3d.delete(rid)
+    astra.data3d.delete(sid)
+
+# ============================
+# D. 汇总
 # ============================
 print("\n" + "=" * 70)
 print("汇总对比 (32x512x512, 360角度, 10子集)")
@@ -297,12 +295,12 @@ print("=" * 70)
 print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'z-RMSE':>10s}")
 print("-" * 72)
 print(f"{'Pure FDK':30s} {fdk_t*1000:>8.0f} ms  {fdk_rmse:>10.5f}  {fdk_ssim:>8.4f} {fdk_zprof.mean():>10.5f}")
-print(f"{'OS-SART x'+str(best_n['n']):30s} {best_n['t']*1000:>8.0f} ms  {best_n['rmse']:>10.5f}  {best_n['ssim']:>8.4f} {best_n_zprof.mean():>10.5f}")
+print(f"{'Hybrid IR':30s} {t_hybrid*1000:>8.0f} ms  {r_hybrid:>10.5f}  {s_hybrid:>8.4f} {hybrid_zprof.mean():>10.5f}")
 print(f"{'TV-OS-SART x'+str(best_tv['n']):30s} {best_tv['t']*1000:>8.0f} ms  {best_tv['rmse']:>10.5f}  {best_tv['ssim']:>8.4f} {best_tv_zprof.mean():>10.5f}")
 
 results = [
     ("Pure FDK", fdk_t, fdk_rmse, fdk_ssim),
-    ("OS-SART x"+str(best_n["n"]), best_n["t"], best_n["rmse"], best_n["ssim"]),
+    ("Hybrid IR", t_hybrid, r_hybrid, s_hybrid),
     ("TV-OS-SART x"+str(best_tv["n"]), best_tv["t"], best_tv["rmse"], best_tv["ssim"]),
 ]
 
@@ -310,14 +308,14 @@ results = [
 print("\n生成可视化...")
 os.makedirs("img_3d_helical", exist_ok=True)
 mid = nz // 2
-fig = plt.figure(figsize=(24, 12))
+fig = plt.figure(figsize=(28, 12))
 gs = GridSpec(3, 4, figure=fig, hspace=0.4, wspace=0.3)
 ts = strftime("%Y-%m-%d %H:%M:%S", localtime())
 
 titles_upper = [
     ("Ground Truth", vol_gt[mid], None, None, None, None),
     ("FDK", fdk_rec[mid], fdk_rmse, fdk_ssim, fdk_t, None),
-    ("OS-SART", best_n["rec"][mid], best_n["rmse"], best_n["ssim"], best_n["t"], best_n["n"]),
+    ("Hybrid IR\nOS3+TV1+FDK50%", best_hybrid["rec"][mid], best_hybrid["rmse"], best_hybrid["ssim"], best_hybrid["t"], None),
     ("TV-OS-SART", best_tv["rec"][mid], best_tv["rmse"], best_tv["ssim"], best_tv["t"], best_tv["n"]),
 ]
 for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
@@ -343,9 +341,9 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
 
 # z-profile 图 (第3行)
 z_coord = np.arange(nz)
-zprofiles = [fdk_zprof, best_n_zprof, best_tv_zprof]
-zlabels = ["FDK", "OS-SART", "TV-OS-SART"]
-zcolors = ["orange", "green", "red"]
+zprofiles = [fdk_zprof, hybrid_zprof, best_tv_zprof]
+zlabels = ["FDK", "Hybrid IR", "TV-OS-SART"]
+zcolors = ["orange", "purple", "red"]
 ax_z = fig.add_subplot(gs[2, :])
 for zp, zl, zc in zip(zprofiles, zlabels, zcolors):
     ax_z.plot(z_coord, zp, 'o-', label=zl, color=zc, markersize=3)
@@ -355,7 +353,7 @@ ax_z.legend(fontsize=8)
 ax_z.set_title("z-profile: 沿 z 方向逐片 RMSE", fontsize=10)
 ax_z.grid(True, alpha=0.3)
 
-plt.suptitle(f"ASTRA CUDA Helical Cone-beam 加速版 (32x512x512, {n_angles}角度, pitch={pitch}mm, 10子集)\nASTRA对象复用+各向异性TV β调度+z-profile\n{ts}",
+plt.suptitle(f"ASTRA CUDA Helical Cone-beam (32x512x512, {n_angles}角度, pitch={pitch}mm, 10子集)\n+ Hybrid IR (OS-SART×3+TV+FDK混合)\n{ts}",
              fontsize=12, fontweight="bold", y=0.98)
 plt.savefig("img_3d_helical/astra_cone_hybrid.png", dpi=150, bbox_inches="tight")
 plt.close()
@@ -369,7 +367,6 @@ summary = {
                 for name,t,r,s in results},
     "z_profile": {
         "FDK": [round(x,5) for x in fdk_zprof.tolist()],
-        "OS-SART x"+str(best_n["n"]): [round(x,5) for x in best_n_zprof.tolist()],
         "TV-OS-SART x"+str(best_tv["n"]): [round(x,5) for x in best_tv_zprof.tolist()],
     }
 }

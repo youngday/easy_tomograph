@@ -1,7 +1,7 @@
 """
 螺旋 CT 混合重建 (TIGRE 锥束) — Helical CBCT 优化版
 =====================================================
-FDK / Nesterov-OS-SART / TV-OS-SART (自适应 β)
+FDK / Hybrid IR / TV-OS-SART (自适应 β)
 优化: offOrigin-z 螺旋轨迹 + Nesterov 动量 + z-profile
 """
 
@@ -131,39 +131,17 @@ fdk_zprof = calc_z_profile(fdk_rec)
 print(f"   RMSE={fdk_rmse:.5f}, SSIM={fdk_ssim:.4f}, {fdk_t * 1000:.0f}ms")
 print(f"   z-profile: mean={fdk_zprof.mean():.5f}, max={fdk_zprof.max():.5f}, min={fdk_zprof.min():.5f}")
 
-# ========== B. 噪声/伪影 + 加速重建 ==========
-best_c = {"rmse": 1e9, "ssim": -1, "rec": None, "t": 0, "n": 0}
+# ========== B. 噪声/伪影 + Hybrid IR ==========
 print("-" * 55)
-print("B. 噪声/伪影 + OS-SART / TV-OS-SART (加速)")
+print("B. Hybrid IR (OS-SART×3 + TV×1 + FDK混合 50%)")
 print("-" * 55)
 
 from ct_noise import add_artifacts
 np.random.seed(2024)
 sino_noisy = add_artifacts(sino, dose_level=0.5, hardening=False, rings=True, scatter=False)
 
-
-
 # 有噪声 FDK 初始化
 rec_fdk_noisy = algs.fdk(sino_noisy, geo, angles, filter="hann")
-
-# ===== B1. OS-SART (baseline) =====
-print("   --- B1. OS-SART ---")
-best_n = {"rmse":1e9,"ssim":-1,"rec":None,"t":0,"n":0}
-rec_n = rec_fdk_noisy.copy()
-prev_n = 0
-for ni in [1, 3, 5]:
-    dn = ni - prev_n
-    t0 = time()
-    rec_n = algs.ossart(sino_noisy, geo, angles, niter=dn, init=rec_n,
-                        blocksize=blocksize, verbose=False)
-    t = time() - t0
-    r, s = calc_rmse(linear_scale(rec_n)), calc_ssim(linear_scale(rec_n))
-    if r < best_n["rmse"]:
-        best_n = {"rmse": r, "ssim": s, "rec": linear_scale(rec_n), "t": t, "n": ni}
-    print(f"   OS-SART x{ni:3d}: RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-    prev_n = ni
-print(f"   >> 最优: {best_n['n']}: RMSE={best_n['rmse']:.5f}")
-best_n_zprof = calc_z_profile(best_n["rec"])
 
 # ---- TV 梯度 (预分配缓存) ----
 class TVGradientCache:
@@ -200,8 +178,24 @@ class TVGradientCache:
         np.add(v, beta * div, out=v)
         return v
 
-# ===== B2. TV-OS-SART (带缓存TV + 合并niter) =====
-print(f"   --- B2. TV-OS-SART (缓存TV, bs={blocksize}) ---")
+t0 = time()
+rec_hybrid = rec_fdk_noisy.copy()
+rec_hybrid = algs.ossart(sino_noisy, geo, angles, niter=3, init=rec_hybrid,
+                         blocksize=blocksize, verbose=False)
+tv_cache_hybrid = TVGradientCache((nz, N, N), w_z=1.5)
+rec_hybrid = tv_cache_hybrid.compute(rec_hybrid, 0.003)
+rec_hybrid = 0.5 * rec_hybrid + 0.5 * rec_fdk_noisy
+t_hybrid = time() - t0
+r_hybrid, s_hybrid = calc_rmse(linear_scale(rec_hybrid)), calc_ssim(linear_scale(rec_hybrid))
+best_hybrid = {"rec": linear_scale(rec_hybrid), "rmse": r_hybrid, "ssim": s_hybrid, "t": t_hybrid}
+print(f"   Hybrid IR: RMSE={r_hybrid:.5f}, SSIM={s_hybrid:.4f}, {t_hybrid*1000:.0f}ms")
+hybrid_zprof = calc_z_profile(best_hybrid["rec"])
+print(f"   z-profile: mean={hybrid_zprof.mean():.5f}")
+
+# ========== C. TV-OS-SART (带缓存TV + 合并niter) ==========
+print("-" * 55)
+print(f"C. TV-OS-SART (缓存TV, bs={blocksize})")
+print("-" * 55)
 tv_cache = TVGradientCache((nz, N, N), w_z=1.5)
 rec_tv = rec_fdk_noisy.copy()
 best_tv = {"rmse": 1e9, "ssim": -1, "rec": None, "t": 0, "n": 0}
@@ -226,24 +220,24 @@ for ni, beta in zip(tv_niters, tv_betas):
     print(f"   TV-OS-SART x{ni:3d} (β={beta:.4f}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
     prev_n = ni
 print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}")
-tv_improv = (1 - best_tv['rmse'] / best_n['rmse']) * 100
+tv_improv = (1 - best_tv['rmse'] / fdk_rmse) * 100
 print(f"   TV 改善: {tv_improv:+.1f}%")
 best_tv_zprof = calc_z_profile(best_tv["rec"])
 print(f"   z-profile: mean={best_tv_zprof.mean():.5f}")
 
-# ========== C. 汇总 ==========
+# ========== D. 汇总 ==========
 print("\n" + "=" * 70)
 print(f"汇总对比 (32x512x512, 360角度, blocksize={blocksize})")
 print("=" * 70)
 print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'z-RMSE':>10s}")
 print("-" * 72)
 print(f"{'Pure FDK':30s} {fdk_t * 1000:>8.0f} ms  {fdk_rmse:>10.5f}  {fdk_ssim:>8.4f} {fdk_zprof.mean():>10.5f}")
-print(f"{'OS-SART x'+str(best_n['n']):30s} {best_n['t']*1000:>8.0f} ms  {best_n['rmse']:>10.5f}  {best_n['ssim']:>8.4f} {best_n_zprof.mean():>10.5f}")
+print(f"{'Hybrid IR':30s} {t_hybrid*1000:>8.0f} ms  {r_hybrid:>10.5f}  {s_hybrid:>8.4f} {hybrid_zprof.mean():>10.5f}")
 print(f"{'TV-OS-SART x'+str(best_tv['n']):30s} {best_tv['t']*1000:>8.0f} ms  {best_tv['rmse']:>10.5f}  {best_tv['ssim']:>8.4f} {best_tv_zprof.mean():>10.5f}")
 
 results = [
     ("Pure FDK", fdk_t, fdk_rmse, fdk_ssim),
-    ("OS-SART x" + str(best_n["n"]), best_n["t"], best_n["rmse"], best_n["ssim"]),
+    ("Hybrid IR", t_hybrid, r_hybrid, s_hybrid),
     ("TV-OS-SART x" + str(best_tv["n"]), best_tv["t"], best_tv["rmse"], best_tv["ssim"]),
 ]
 
@@ -258,7 +252,7 @@ ts = strftime("%Y-%m-%d %H:%M:%S", localtime())
 titles_upper = [
     ("Ground Truth", vol_gt[mid], None, None, None, None),
     ("FDK", fdk_rec[mid], fdk_rmse, fdk_ssim, fdk_t, None),
-    ("OS-SART", best_n["rec"][mid], best_n["rmse"], best_n["ssim"], best_n["t"], best_n["n"]),
+    ("Hybrid IR\nOS3+TV1+FDK50%", best_hybrid["rec"][mid], best_hybrid["rmse"], best_hybrid["ssim"], best_hybrid["t"], None),
     ("TV-OS-SART", best_tv["rec"][mid], best_tv["rmse"], best_tv["ssim"], best_tv["t"], best_tv["n"]),
 ]
 for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
@@ -289,8 +283,8 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
 z_coord = np.arange(nz)
 ax_z = fig.add_subplot(gs[2, :])
 for zp, zl, zc in zip(
-    [fdk_zprof, best_n_zprof, best_tv_zprof],
-    ["FDK", "OS-SART", "TV-OS-SART"],
+    [fdk_zprof, hybrid_zprof, best_tv_zprof],
+    ["FDK", "Hybrid IR", "TV-OS-SART"],
     ["orange", "green", "red"]
 ):
     ax_z.plot(z_coord, zp, 'o-', label=zl, color=zc, markersize=3)
@@ -301,8 +295,8 @@ ax_z.set_title("z-profile: 沿 z 方向逐片 RMSE", fontsize=10)
 ax_z.grid(True, alpha=0.3)
 
 plt.suptitle(
-    f"TIGRE CUDA Helical Cone-beam 加速版 (512x512x32, {n_angles}角度, pitch={pitch}mm, blocksize={blocksize})\n"
-    f"OS-SART+TV-OS-SART 各向异性TV β调度+z-profile\n{ts}",
+    f"TIGRE CUDA Helical Cone-beam (512x512x32, {n_angles}角度, pitch={pitch}mm, blocksize={blocksize})\n"
+    f"+ Hybrid IR (OS-SART×3+TV+FDK混合)\n{ts}",
     fontsize=12, fontweight="bold", y=0.98
 )
 plt.savefig("img_3d_helical/tigre_cone_hybrid.png", dpi=150, bbox_inches="tight")
@@ -318,7 +312,7 @@ summary = {
     },
     "z_profile": {
         "FDK": [round(x,5) for x in fdk_zprof.tolist()],
-        "OS-SART x"+str(best_n["n"]): [round(x,5) for x in best_n_zprof.tolist()],
+        "Hybrid IR": [round(x,5) for x in hybrid_zprof.tolist()],
         "TV-OS-SART x"+str(best_tv["n"]): [round(x,5) for x in best_tv_zprof.tolist()],
     }
 }

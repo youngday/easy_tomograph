@@ -1,7 +1,7 @@
 """
 FBP + IR 混合重建 (ASTRA 锥束 CBCT) — 与 TIGRE 对齐版
 ======================================================
-FDK / OS-SART / 噪声OS-SART / TV-OS-SART
+FDK / TV-OS-SART / Hybrid IR
 """
 
 from time import time, strftime, localtime
@@ -151,52 +151,10 @@ print(f"   RMSE={fdk_rmse:.5f}, SSIM={fdk_ssim:.4f}, {fdk_t*1000:.0f}ms")
 print(f"   z-profile: mean={fdk_zprof.mean():.5f}, max={fdk_zprof.max():.5f}")
 
 # ============================
-# B. OS-SART (SIRT3D 子集交替, warm-start)
+# B. TV-OS-SART (on noisy data)
 # ============================
 print("-" * 55)
-print("B. OS-SART (10子集, SIRT3D 交替, warm-start)")
-print("-" * 55)
-n_subsets = 10
-sub_size = n_angles // n_subsets
-subsets = []
-for i in range(n_subsets):
-    idx = slice(i * sub_size, (i + 1) * sub_size)
-    sv = vectors[idx].copy()
-    pg = astra.create_proj_geom("cone_vec", n_det_row, n_det_col, sv)
-    ss = np.ascontiguousarray(sino[:, idx, :])
-    sid_sub = astra.data3d.create("-sino", pg, ss)
-    subsets.append((pg, sid_sub))
-
-best_c = {"rmse": 1e9}
-rec_os = fdk_raw.copy()
-prev_n = 0
-for n_iter in [1, 3, 5, 10]:
-    dn = n_iter - prev_n
-    t0 = time()
-    for _ in range(dn):
-        for _, sid_sub in subsets:
-            rid_os = astra.data3d.create("-vol", vol_geom, data=rec_os.astype(np.float32))
-            c = astra.astra_dict("SIRT3D_CUDA")
-            c["ProjectionDataId"] = sid_sub; c["ReconstructionDataId"] = rid_os
-            c["option"] = {"GPUindex": 0}
-            a = astra.algorithm.create(c); astra.algorithm.run(a, 1)
-            rec_os = astra.data3d.get(rid_os).copy()
-            astra.algorithm.delete(a); astra.data3d.delete(rid_os)
-    t = time() - t0
-    r, s = calc_rmse(linear_scale(rec_os)), calc_ssim(linear_scale(rec_os))
-    if r < best_c["rmse"]: best_c = {"rmse": r, "ssim": s, "rec": linear_scale(rec_os), "t": t, "n": n_iter}
-    print(f"   x{n_iter:3d} (+{dn}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-    prev_n = n_iter
-for _, sid in subsets: astra.data3d.delete(sid)
-best_c_zprof = calc_z_profile(best_c['rec'])
-print(f"   >> 最优: OS-SART x{best_c['n']}: RMSE={best_c['rmse']:.5f}")
-print(f"   z-profile: mean={best_c_zprof.mean():.5f}, max={best_c_zprof.max():.5f}")
-
-# ============================
-# C. 噪声/伪影 + TV-OS-SART
-# ============================
-print("-" * 55)
-print("C. 噪声/伪影 + TV-OS-SART")
+print("B. TV-OS-SART")
 print("-" * 55)
 
 from ct_noise import add_artifacts
@@ -213,6 +171,9 @@ def tv_gradient(v, eps=1e-8):
     div[:,1:-1,:]+=uy[:,1:-1,:]-uy[:,:-2,:]; div[:,0,:]+=uy[:,0,:]; div[:,-1,:]+=-uy[:,-2,:]
     div[1:-1,:,:]+=uz[1:-1,:,:]-uz[:-2,:,:]; div[0,:,:]+=uz[0,:,:]; div[-1,:,:]+=-uz[-2,:,:]
     return -div
+
+n_subsets = 10
+sub_size = n_angles // n_subsets
 
 # 对噪声数据建子集
 subsets_n = []
@@ -232,29 +193,6 @@ c["ProjectionDataId"] = sid_n; c["ReconstructionDataId"] = rid_n
 a = astra.algorithm.create(c); astra.algorithm.run(a)
 rec_fdk_n = astra.data3d.get(rid_n).copy()
 astra.algorithm.delete(a); astra.data3d.delete(rid_n); astra.data3d.delete(sid_n)
-
-# OS-SART on noisy
-best_n = {"rmse": 1e9}
-rec_n = rec_fdk_n.copy()
-prev_n = 0
-for ni in [1, 3, 5]:
-    dn = ni - prev_n
-    t0 = time()
-    for _ in range(dn):
-        for _, sid_sub in subsets_n:
-            rid = astra.data3d.create("-vol", vol_geom, data=rec_n.astype(np.float32))
-            c = astra.astra_dict("SIRT3D_CUDA")
-            c["ProjectionDataId"] = sid_sub; c["ReconstructionDataId"] = rid
-            c["option"] = {"GPUindex": 0}
-            a = astra.algorithm.create(c); astra.algorithm.run(a, 1)
-            rec_n = astra.data3d.get(rid).copy()
-            astra.algorithm.delete(a); astra.data3d.delete(rid)
-    t = time() - t0
-    r, s = calc_rmse(linear_scale(rec_n)), calc_ssim(linear_scale(rec_n))
-    if r < best_n["rmse"]: best_n = {"rmse": r, "ssim": s, "rec": linear_scale(rec_n), "t": t, "n": ni}
-    print(f"   有噪声 OS-SART x{ni:3d}: RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-    prev_n = ni
-print(f"   >> 最优: x{best_n['n']}: RMSE={best_n['rmse']:.5f}")
 
 # TV-OS-SART (β scheduling: high→low for denoise→detail)
 best_tv = {"rmse": 1e9}
@@ -278,12 +216,36 @@ for ni, beta in zip([1, 3, 5, 10], [0.003, 0.002, 0.001, 0.0005]):
     if r < best_tv["rmse"]: best_tv = {"rmse": r, "ssim": s, "rec": linear_scale(rec_tv), "t": t, "n": ni}
     print(f"   TV-OS-SART x{ni:3d}: RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
     prev_n = ni
+
+# ============================
+# C. Hybrid IR (OS-SART×3 + TV×1 + FDK混合 50%)
+# ============================
+print("-" * 55)
+print("C. Hybrid IR (OS-SART×3 + TV×1 + FDK混合 50%)")
+print("-" * 55)
+t0 = time()
+rec_hybrid = rec_fdk_n.copy()
+for _ in range(3):
+    for _, sid_sub in subsets_n:
+        rid = astra.data3d.create("-vol", vol_geom, data=rec_hybrid.astype(np.float32))
+        c = astra.astra_dict("SIRT3D_CUDA")
+        c["ProjectionDataId"] = sid_sub; c["ReconstructionDataId"] = rid
+        c["option"] = {"GPUindex": 0}
+        a = astra.algorithm.create(c); astra.algorithm.run(a, 1)
+        rec_hybrid = astra.data3d.get(rid).copy()
+        astra.algorithm.delete(a); astra.data3d.delete(rid)
+rec_hybrid = rec_hybrid - 0.003 * tv_gradient(rec_hybrid)
+rec_hybrid = 0.5 * rec_hybrid + 0.5 * rec_fdk_n
+t_hybrid = time() - t0
+r_hybrid, s_hybrid = calc_rmse(linear_scale(rec_hybrid)), calc_ssim(linear_scale(rec_hybrid))
+print(f"   Hybrid IR: RMSE={r_hybrid:.5f}, SSIM={s_hybrid:.4f}, {t_hybrid*1000:.0f}ms")
+hybrid_zprof = calc_z_profile(linear_scale(rec_hybrid))
+print(f"   z-profile: mean={hybrid_zprof.mean():.5f}, max={hybrid_zprof.max():.5f}")
+
 for _, sid in subsets_n: astra.data3d.delete(sid)
 print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}")
-tv_improv = (1 - best_tv['rmse']/best_n['rmse']) * 100
-print(f"   TV 改善: {tv_improv:+.1f}%")
-best_n_zprof = calc_z_profile(best_n['rec'])
-print(f"   有噪声OS-SART z-profile: mean={best_n_zprof.mean():.5f}, max={best_n_zprof.max():.5f}")
+tv_improv = (1 - best_tv['rmse']/fdk_rmse) * 100
+print(f"   TV 改善 vs FDK: {tv_improv:+.1f}%")
 best_tv_zprof = calc_z_profile(best_tv['rec'])
 print(f"   TV-OS-SART z-profile: mean={best_tv_zprof.mean():.5f}, max={best_tv_zprof.max():.5f}")
 
@@ -296,30 +258,27 @@ print("=" * 70)
 print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'z-RMSE':>10s}")
 print("-" * 72)
 print(f"{'Pure FDK':30s} {fdk_t*1000:>8.0f} ms  {fdk_rmse:>10.5f}  {fdk_ssim:>8.4f} {fdk_zprof.mean():>10.5f}")
-print(f"{'OS-SART x'+str(best_c['n']):30s} {best_c['t']*1000:>8.0f} ms  {best_c['rmse']:>10.5f}  {best_c['ssim']:>8.4f} {best_c_zprof.mean():>10.5f}")
-print(f"{'有噪声 OS-SART x'+str(best_n['n']):30s} {best_n['t']*1000:>8.0f} ms  {best_n['rmse']:>10.5f}  {best_n['ssim']:>8.4f} {best_n_zprof.mean():>10.5f}")
 print(f"{'TV-OS-SART x'+str(best_tv['n']):30s} {best_tv['t']*1000:>8.0f} ms  {best_tv['rmse']:>10.5f}  {best_tv['ssim']:>8.4f} {best_tv_zprof.mean():>10.5f}")
+print(f"{'Hybrid IR':30s} {t_hybrid*1000:>8.0f} ms  {r_hybrid:>10.5f}  {s_hybrid:>8.4f} {hybrid_zprof.mean():>10.5f}")
 
 results = [
     ("Pure FDK", fdk_t, fdk_rmse, fdk_ssim),
-    ("OS-SART x"+str(best_c["n"]), best_c["t"], best_c["rmse"], best_c["ssim"]),
-    ("有噪声 OS-SART x"+str(best_n["n"]), best_n["t"], best_n["rmse"], best_n["ssim"]),
     ("TV-OS-SART x"+str(best_tv["n"]), best_tv["t"], best_tv["rmse"], best_tv["ssim"]),
+    ("Hybrid IR", t_hybrid, r_hybrid, s_hybrid),
 ]
 
 # 可视化
 print("\n生成可视化...")
 os.makedirs("img_3d_axial", exist_ok=True)
 mid = nz // 2
-fig = plt.figure(figsize=(22, 14))
-gs = GridSpec(3, 5, figure=fig, hspace=0.45, wspace=0.3)
+fig = plt.figure(figsize=(24, 12))
+gs = GridSpec(3, 4, figure=fig, hspace=0.45, wspace=0.3)
 ts = strftime("%Y-%m-%d %H:%M:%S", localtime())
 
 titles_upper = [
     ("Ground Truth", vol_gt[mid], None, None, None, None),
     ("FDK", fdk_rec[mid], fdk_rmse, fdk_ssim, fdk_t, None),
-    ("OS-SART", best_c["rec"][mid], best_c["rmse"], best_c["ssim"], best_c["t"], best_c["n"]),
-    ("Noisy OS-SART", best_n["rec"][mid], best_n["rmse"], best_n["ssim"], best_n["t"], best_n["n"]),
+    ("Hybrid IR\nOS3+TV1+FDK50%", linear_scale(rec_hybrid)[mid], r_hybrid, s_hybrid, t_hybrid, None),
     ("TV-OS-SART", best_tv["rec"][mid], best_tv["rmse"], best_tv["ssim"], best_tv["t"], best_tv["n"]),
 ]
 for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
@@ -344,9 +303,9 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
 z_coord = np.arange(nz)
 ax_z = fig.add_subplot(gs[2, :])
 for zp, zl, zc in zip(
-    [fdk_zprof, best_c_zprof, best_n_zprof, best_tv_zprof],
-    ["FDK", "OS-SART", "Noisy OS-SART", "TV-OS-SART"],
-    ["orange", "green", "blue", "red"]
+    [fdk_zprof, hybrid_zprof, best_tv_zprof],
+    ["FDK", "Hybrid IR", "TV-OS-SART"],
+    ["orange", "purple", "red"]
 ):
     ax_z.plot(z_coord, zp, 'o-', label=zl, color=zc, markersize=3)
 ax_z.set_xlabel("z slice", fontsize=9)
@@ -354,7 +313,7 @@ ax_z.set_ylabel("RMSE per slice", fontsize=9)
 ax_z.legend(fontsize=8)
 ax_z.set_title("z-profile: 沿 z 方向逐片 RMSE", fontsize=10)
 ax_z.grid(True, alpha=0.3)
-plt.suptitle(f"ASTRA CUDA Cone-beam (32x512x512, {n_angles}角度, 10子集)\n{ts}",
+plt.suptitle(f"ASTRA CUDA Cone-beam (32x512x512, {n_angles}角度, 10子集)\n+ Hybrid IR (OS-SART×3+TV+FDK混合)\n{ts}",
              fontsize=12, fontweight="bold", y=0.98)
 plt.savefig("img_3d_axial/astra_cone_hybrid.png", dpi=150, bbox_inches="tight")
 plt.close()
@@ -367,8 +326,7 @@ summary = {
                 for name,t,r,s in results},
     "z_profile": {
         "FDK": [round(x,5) for x in fdk_zprof.tolist()],
-        "OS-SART x"+str(best_c["n"]): [round(x,5) for x in best_c_zprof.tolist()],
-        "有噪声 OS-SART x"+str(best_n["n"]): [round(x,5) for x in best_n_zprof.tolist()],
+        "Hybrid IR": [round(x,5) for x in hybrid_zprof.tolist()],
         "TV-OS-SART x"+str(best_tv["n"]): [round(x,5) for x in best_tv_zprof.tolist()],
     }
 }

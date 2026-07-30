@@ -1,7 +1,7 @@
 """
 FBP + IR 混合重建 (TIGRE 锥束 CBCT) — 优化版
 ===============================================
-FDK / OS-SART (warm-start) / TV-OS-SART
+FDK / TV-OS-SART / Hybrid IR
 优化: 统一体模(M4) + 加速blocksize + 图像打印时间
 """
 
@@ -130,35 +130,10 @@ fdk_zprof = calc_z_profile(fdk_rec)
 print(f"   RMSE={fdk_rmse:.5f}, SSIM={fdk_ssim:.4f}, {fdk_t * 1000:.0f}ms")
 print(f"   z-profile: mean={fdk_zprof.mean():.5f}, max={fdk_zprof.max():.5f}")
 
-# ========== B. OS-SART (clean, warm-start from FDK) ==========
+# ========== B. TV-OS-SART (噪声鲁棒) ==========
 print("-" * 55)
-print("B. FBP + OS-SART (warm-start, blocksize=36)")
+print("B. TV-OS-SART (噪声鲁棒)")
 print("-" * 55)
-c_hist = []
-best_c = {"rmse": 1e9, "ssim": -1, "rec": None, "t": 0, "n": 0}
-rec_c = rec_fdk.copy()
-prev_n = 0
-for n_iter in [1, 3, 5, 10]:
-    dn = n_iter - prev_n
-    t0 = time()
-    rec_c = algs.ossart(sino, geo, angles, niter=dn, init=rec_c, blocksize=36, verbose=False)
-    t = time() - t0
-    r = calc_rmse(linear_scale(rec_c))
-    s = calc_ssim(linear_scale(rec_c))
-    c_hist.append((n_iter, t, r, s))
-    if r < best_c["rmse"]:
-        best_c = {"rmse": r, "ssim": s, "rec": linear_scale(rec_c), "t": t, "n": n_iter}
-    print(f"   x{n_iter:3d} (+{dn}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-    prev_n = n_iter
-best_c_zprof = calc_z_profile(best_c["rec"])
-print(f"   >> 最优: OS-SART x{best_c['n']}: RMSE={best_c['rmse']:.5f}")
-print(f"   z-profile: mean={best_c_zprof.mean():.5f}, max={best_c_zprof.max():.5f}")
-
-# ========== C. 噪声/伪影对比 (OS-SART vs TV-OS-SART) ==========
-print("-" * 55)
-print("C. 噪声/伪影对比 (量子噪声 + 环伪影)")
-print("-" * 55)
-print("   比较 OS-SART 与 TV-OS-SART 的鲁棒性")
 
 from ct_noise import add_artifacts
 
@@ -175,75 +150,73 @@ def tv_gradient(v, eps=1e-8):
     div[1:-1,:,:] += uz[1:-1,:,:]-uz[:-2,:,:]; div[0,:,:]+=uz[0,:,:]; div[-1,:,:]+=-uz[-2,:,:]
     return -div
 
-# 有噪声 OS-SART
 rec_fdk_noisy = algs.fdk(sino_noisy, geo, angles, filter="hann")
-rec_n = rec_fdk_noisy.copy()
-n_hist = []; best_n = {"rmse":1e9,"ssim":-1,"rec":None,"t":0,"n":0}
-prev_n = 0
-for ni in [1, 3, 5]:
-    dn = ni - prev_n
-    t0=time(); rec_n=algs.ossart(sino_noisy,geo,angles,niter=dn,init=rec_n,blocksize=36,verbose=False)
-    t=time()-t0; r,s=calc_rmse(linear_scale(rec_n)),calc_ssim(linear_scale(rec_n))
-    n_hist.append((ni,t,r,s))
-    if r<best_n["rmse"]: best_n={"rmse":r,"ssim":s,"rec":linear_scale(rec_n),"t":t,"n":ni}
-    print(f"   有噪声 OS-SART x{ni:3d} (+{dn}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-    prev_n = ni
-print(f"   >> 最优: {best_n['n']}: RMSE={best_n['rmse']:.5f}")
 
 # TV-OS-SART (β scheduling: high→low for denoise→detail)
-rec_tv=rec_fdk_noisy.copy()
-tv_hist=[]; best_tv={"rmse":1e9,"ssim":-1,"rec":None,"t":0,"n":0}
+rec_tv = rec_fdk_noisy.copy()
+tv_hist = []; best_tv = {"rmse": 1e9, "ssim": -1, "rec": None, "t": 0, "n": 0}
 prev_n = 0
 for ni, beta in zip([1, 3, 5, 10], [0.003, 0.002, 0.001, 0.0005]):
     dn = ni - prev_n
-    t0=time(); rec_tv=algs.ossart(sino_noisy,geo,angles,niter=dn,init=rec_tv,blocksize=36,verbose=False)
-    rec_tv=rec_tv-beta*tv_gradient(rec_tv)
-    t=time()-t0; r,s=calc_rmse(linear_scale(rec_tv)),calc_ssim(linear_scale(rec_tv))
-    tv_hist.append((ni,t,r,s))
-    if r<best_tv["rmse"]: best_tv={"rmse":r,"ssim":s,"rec":linear_scale(rec_tv),"t":t,"n":ni}
+    t0 = time(); rec_tv = algs.ossart(sino_noisy, geo, angles, niter=dn, init=rec_tv, blocksize=36, verbose=False)
+    rec_tv = rec_tv - beta * tv_gradient(rec_tv)
+    t = time() - t0; r, s = calc_rmse(linear_scale(rec_tv)), calc_ssim(linear_scale(rec_tv))
+    tv_hist.append((ni, t, r, s))
+    if r < best_tv["rmse"]: best_tv = {"rmse": r, "ssim": s, "rec": linear_scale(rec_tv), "t": t, "n": ni}
     print(f"   TV-OS-SART x{ni:3d} (+{dn}, \u03b2={beta}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
     prev_n = ni
-print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}")
-tv_improv = (1-best_tv['rmse']/best_n['rmse'])*100
-print(f"   TV 改善: {tv_improv:+.1f}%")
-best_n_zprof = calc_z_profile(best_n["rec"])
-print(f"   有噪声OS-SART z-profile: mean={best_n_zprof.mean():.5f}, max={best_n_zprof.max():.5f}")
+print(f"   >> \u6700\u4f18: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}")
+tv_improv = (1 - best_tv['rmse'] / fdk_rmse) * 100
+print(f"   TV \u6539\u5584: {tv_improv:+.1f}%")
 best_tv_zprof = calc_z_profile(best_tv["rec"])
 print(f"   TV-OS-SART z-profile: mean={best_tv_zprof.mean():.5f}, max={best_tv_zprof.max():.5f}")
 
-# ========== D. 汇总 ==========
+# ===== C. Hybrid IR =====
+print("-" * 55)
+print("C. Hybrid IR (OS-SART\u00d73 + TV\u00d71 + FDK\u6df7\u5408 50%)")
+print("-" * 55)
+t0 = time()
+rec_hybrid = rec_fdk_noisy.copy()
+rec_hybrid = algs.ossart(sino_noisy, geo, angles, niter=3, init=rec_hybrid,
+                         blocksize=36, verbose=False)
+rec_hybrid = rec_hybrid - 0.003 * tv_gradient(rec_hybrid)
+rec_hybrid = 0.5 * rec_hybrid + 0.5 * rec_fdk_noisy
+t_hybrid = time() - t0
+r_hybrid, s_hybrid = calc_rmse(linear_scale(rec_hybrid)), calc_ssim(linear_scale(rec_hybrid))
+print(f"   Hybrid IR: RMSE={r_hybrid:.5f}, SSIM={s_hybrid:.4f}, {t_hybrid*1000:.0f}ms")
+hybrid_zprof = calc_z_profile(linear_scale(rec_hybrid))
+print(f"   z-profile: mean={hybrid_zprof.mean():.5f}, max={hybrid_zprof.max():.5f}")
+
+# ========== D. \u6c47\u603b ==========
 print("\n" + "=" * 70)
-print("汇总对比 (32x512x512, 360角度, blocksize=36)")
+print("\u6c47\u603b\u5bf9\u6bd4 (32x512x512, 360\u89d2\u5ea6, blocksize=36)")
 print("=" * 70)
-print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'z-RMSE':>10s}")
+print(f"{'\u7b97\u6cd5':30s} {'\u8017\u65f6(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'z-RMSE':>10s}")
 print("-" * 72)
 print(f"{'Pure FDK':30s} {fdk_t * 1000:>8.0f} ms  {fdk_rmse:>10.5f}  {fdk_ssim:>8.4f} {fdk_zprof.mean():>10.5f}")
-print(f"{'OS-SART x' + str(best_c['n']):30s} {best_c['t'] * 1000:>8.0f} ms  {best_c['rmse']:>10.5f}  {best_c['ssim']:>8.4f} {best_c_zprof.mean():>10.5f}")
-print(f"{'有噪声 OS-SART x'+str(best_n['n']):30s} {best_n['t']*1000:>8.0f} ms  {best_n['rmse']:>10.5f}  {best_n['ssim']:>8.4f} {best_n_zprof.mean():>10.5f}")
+print(f"{'Hybrid IR':30s} {t_hybrid*1000:>8.0f} ms  {r_hybrid:>10.5f}  {s_hybrid:>8.4f} {hybrid_zprof.mean():>10.5f}")
 print(f"{'TV-OS-SART x'+str(best_tv['n']):30s} {best_tv['t']*1000:>8.0f} ms  {best_tv['rmse']:>10.5f}  {best_tv['ssim']:>8.4f} {best_tv_zprof.mean():>10.5f}")
 
 results = [
     ("Pure FDK", fdk_t, fdk_rmse, fdk_ssim),
-    ("OS-SART x" + str(best_c["n"]), best_c["t"], best_c["rmse"], best_c["ssim"]),
-    ("有噪声 OS-SART x" + str(best_n["n"]), best_n["t"], best_n["rmse"], best_n["ssim"]),
+    ("Hybrid IR", t_hybrid, r_hybrid, s_hybrid),
     ("TV-OS-SART x" + str(best_tv["n"]), best_tv["t"], best_tv["rmse"], best_tv["ssim"]),
 ]
 
-# ========== 可视化 ==========
-print("\n生成可视化...")
+# ========== \u53ef\u89c6\u5316 ==========
+print("\n\u751f\u6210\u53ef\u89c6\u5316...")
 os.makedirs("img_3d_axial", exist_ok=True)
 mid = nz // 2
-fig = plt.figure(figsize=(22, 14))
-gs = GridSpec(3, 5, figure=fig, hspace=0.45, wspace=0.3)
+fig = plt.figure(figsize=(24, 12))
+gs = GridSpec(3, 4, figure=fig, hspace=0.45, wspace=0.3)
 
 ts = strftime("%Y-%m-%d %H:%M:%S", localtime())
 
-# 上排: 重建图像
+# \u4e0a\u6392: \u91cd\u5efa\u56fe\u50cf
 titles_upper = [
     ("Ground Truth", vol_gt[mid], None, None, None, None),
     ("FDK", fdk_rec[mid], fdk_rmse, fdk_ssim, fdk_t, None),
-    ("OS-SART", best_c["rec"][mid], best_c["rmse"], best_c["ssim"], best_c["t"], best_c["n"]),
-    ("Noisy OS-SART", best_n["rec"][mid], best_n["rmse"], best_n["ssim"], best_n["t"], best_n["n"]),
+    ("Hybrid IR\nOS3+TV1+FDK50%", linear_scale(rec_hybrid)[mid], r_hybrid, s_hybrid, t_hybrid, None),
     ("TV-OS-SART", best_tv["rec"][mid], best_tv["rmse"], best_tv["ssim"], best_tv["t"], best_tv["n"]),
 ]
 for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
@@ -257,7 +230,7 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
     ax.set_title(tstr, fontsize=8)
     ax.axis("off")
 
-# 下排: 误差图
+# \u4e0b\u6392: \u8bef\u5dee\u56fe
 for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
     ax2 = fig.add_subplot(gs[1, i])
     if rmse is not None:
@@ -270,23 +243,23 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
         ax2.set_title("Reference", fontsize=8)
     ax2.axis("off")
 
-# z-profile 图 (第3行)
+# z-profile \u56fe (\u7b2c3\u884c)
 z_coord = np.arange(nz)
 ax_z = fig.add_subplot(gs[2, :])
 for zp, zl, zc in zip(
-    [fdk_zprof, best_c_zprof, best_n_zprof, best_tv_zprof],
-    ["FDK", "OS-SART", "Noisy OS-SART", "TV-OS-SART"],
-    ["orange", "green", "blue", "red"]
+    [fdk_zprof, hybrid_zprof, best_tv_zprof],
+    ["FDK", "Hybrid IR", "TV-OS-SART"],
+    ["orange", "purple", "red"]
 ):
     ax_z.plot(z_coord, zp, 'o-', label=zl, color=zc, markersize=3)
 ax_z.set_xlabel("z slice", fontsize=9)
 ax_z.set_ylabel("RMSE per slice", fontsize=9)
 ax_z.legend(fontsize=8)
-ax_z.set_title("z-profile: 沿 z 方向逐片 RMSE", fontsize=10)
+ax_z.set_title("z-profile: \u6cbf z \u65b9\u5411\u9010\u7247 RMSE", fontsize=10)
 ax_z.grid(True, alpha=0.3)
 
 plt.suptitle(
-    f"TIGRE CUDA Cone-beam  (512x512x32, {n_angles}角度, blocksize=36)\n{ts}",
+    f"TIGRE CUDA Cone-beam  (512x512x32, {n_angles}\u89d2\u5ea6, blocksize=36)\n+ Hybrid IR (OS-SART\u00d73+TV+FDK\u6df7\u5408)\n{ts}",
     fontsize=12, fontweight="bold", y=0.98
 )
 plt.savefig("img_3d_axial/tigre_cone_hybrid.png", dpi=150, bbox_inches="tight")
@@ -301,10 +274,9 @@ summary = {
         for name, t, r, s in results
     },
     "z_profile": {
-        "FDK": [round(x,5) for x in fdk_zprof.tolist()],
-        "OS-SART x"+str(best_c["n"]): [round(x,5) for x in best_c_zprof.tolist()],
-        "有噪声 OS-SART x"+str(best_n["n"]): [round(x,5) for x in best_n_zprof.tolist()],
-        "TV-OS-SART x"+str(best_tv["n"]): [round(x,5) for x in best_tv_zprof.tolist()],
+        "FDK": [round(x, 5) for x in fdk_zprof.tolist()],
+        "Hybrid IR": [round(x, 5) for x in hybrid_zprof.tolist()],
+        "TV-OS-SART x" + str(best_tv["n"]): [round(x, 5) for x in best_tv_zprof.tolist()],
     }
 }
 with open("img_3d_axial/tigre_cone_hybrid_summary.json", "w") as f:
