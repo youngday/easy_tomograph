@@ -175,15 +175,21 @@ def tv_gradient(v, eps=1e-8):
 n_subsets = 10
 sub_size = n_angles // n_subsets
 
-# 对噪声数据建子集
-subsets_n = []
+# ---- 预分配 ASTRA 对象 (加速) ----
+subset_algs = []
 for i in range(n_subsets):
     idx = slice(i * sub_size, (i + 1) * sub_size)
     sv = vectors[idx].copy()
     pg = astra.create_proj_geom("cone_vec", n_det_row, n_det_col, sv)
     ss = np.ascontiguousarray(sino_noisy[:, idx, :])
     sid_sub = astra.data3d.create("-sino", pg, ss)
-    subsets_n.append((pg, sid_sub))
+    rid_sub = astra.data3d.create("-vol", vol_geom)
+    cfg = astra.astra_dict("SIRT3D_CUDA")
+    cfg["ProjectionDataId"] = sid_sub
+    cfg["ReconstructionDataId"] = rid_sub
+    cfg["option"] = {"GPUindex": 0}
+    alg_sub = astra.algorithm.create(cfg)
+    subset_algs.append((pg, sid_sub, rid_sub, alg_sub))
 
 # 有噪声 FDK
 sid_n = astra.data3d.create("-sino", proj_geom, sino_noisy)
@@ -194,23 +200,23 @@ a = astra.algorithm.create(c); astra.algorithm.run(a)
 rec_fdk_n = astra.data3d.get(rid_n).copy()
 astra.algorithm.delete(a); astra.data3d.delete(rid_n); astra.data3d.delete(sid_n)
 
-# TV-OS-SART (β scheduling: high→low for denoise→detail)
+# TV-OS-SART (预分配加速)
+def fast_sirt(rec, n_step=1):
+    for _ in range(n_step):
+        for _, sid, rid, alg in subset_algs:
+            astra.data3d.store(rid, rec.astype(np.float32))
+            astra.algorithm.run(alg, 1)
+            rec = astra.data3d.get(rid).copy()
+    return rec
+
 best_tv = {"rmse": 1e9}
 rec_tv = rec_fdk_n.copy()
 prev_n = 0
 for ni, beta in zip([1, 3, 5, 10], [0.003, 0.002, 0.001, 0.0005]):
     dn = ni - prev_n
     t0 = time()
-    for _ in range(dn):
-        for _, sid_sub in subsets_n:
-            rid = astra.data3d.create("-vol", vol_geom, data=rec_tv.astype(np.float32))
-            c = astra.astra_dict("SIRT3D_CUDA")
-            c["ProjectionDataId"] = sid_sub; c["ReconstructionDataId"] = rid
-            c["option"] = {"GPUindex": 0}
-            a = astra.algorithm.create(c); astra.algorithm.run(a, 1)
-            rec_tv = astra.data3d.get(rid).copy()
-            astra.algorithm.delete(a); astra.data3d.delete(rid)
-        rec_tv = rec_tv - beta * tv_gradient(rec_tv)
+    rec_tv = fast_sirt(rec_tv, dn)
+    rec_tv = rec_tv - beta * tv_gradient(rec_tv)
     t = time() - t0
     r, s = calc_rmse(linear_scale(rec_tv)), calc_ssim(linear_scale(rec_tv))
     if r < best_tv["rmse"]: best_tv = {"rmse": r, "ssim": s, "rec": linear_scale(rec_tv), "t": t, "n": ni}
@@ -225,15 +231,7 @@ print("C. Hybrid IR (OS-SART×3 + TV×1 + FDK混合 50%)")
 print("-" * 55)
 t0 = time()
 rec_hybrid = rec_fdk_n.copy()
-for _ in range(3):
-    for _, sid_sub in subsets_n:
-        rid = astra.data3d.create("-vol", vol_geom, data=rec_hybrid.astype(np.float32))
-        c = astra.astra_dict("SIRT3D_CUDA")
-        c["ProjectionDataId"] = sid_sub; c["ReconstructionDataId"] = rid
-        c["option"] = {"GPUindex": 0}
-        a = astra.algorithm.create(c); astra.algorithm.run(a, 1)
-        rec_hybrid = astra.data3d.get(rid).copy()
-        astra.algorithm.delete(a); astra.data3d.delete(rid)
+rec_hybrid = fast_sirt(rec_hybrid, 3)
 rec_hybrid = rec_hybrid - 0.003 * tv_gradient(rec_hybrid)
 rec_hybrid = 0.5 * rec_hybrid + 0.5 * rec_fdk_n
 t_hybrid = time() - t0
@@ -242,7 +240,10 @@ print(f"   Hybrid IR: RMSE={r_hybrid:.5f}, SSIM={s_hybrid:.4f}, {t_hybrid*1000:.
 hybrid_zprof = calc_z_profile(linear_scale(rec_hybrid))
 print(f"   z-profile: mean={hybrid_zprof.mean():.5f}, max={hybrid_zprof.max():.5f}")
 
-for _, sid in subsets_n: astra.data3d.delete(sid)
+for pg, sid, rid, alg in subset_algs:
+    astra.algorithm.delete(alg)
+    astra.data3d.delete(rid)
+    astra.data3d.delete(sid)
 print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}")
 tv_improv = (1 - best_tv['rmse']/fdk_rmse) * 100
 print(f"   TV 改善 vs FDK: {tv_improv:+.1f}%")

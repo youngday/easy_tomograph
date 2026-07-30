@@ -225,6 +225,8 @@ print(f"   TV 改善: {tv_improv:+.1f}%")
 best_tv_zprof = calc_z_profile(best_tv["rec"])
 print(f"   z-profile: mean={best_tv_zprof.mean():.5f}")
 
+
+
 # ========== D. 汇总 ==========
 print("\n" + "=" * 70)
 print(f"汇总对比 (32x512x512, 360角度, blocksize={blocksize})")
@@ -235,10 +237,12 @@ print(f"{'Pure FDK':30s} {fdk_t * 1000:>8.0f} ms  {fdk_rmse:>10.5f}  {fdk_ssim:>
 print(f"{'Hybrid IR':30s} {t_hybrid*1000:>8.0f} ms  {r_hybrid:>10.5f}  {s_hybrid:>8.4f} {hybrid_zprof.mean():>10.5f}")
 print(f"{'TV-OS-SART x'+str(best_tv['n']):30s} {best_tv['t']*1000:>8.0f} ms  {best_tv['rmse']:>10.5f}  {best_tv['ssim']:>8.4f} {best_tv_zprof.mean():>10.5f}")
 
+
 results = [
     ("Pure FDK", fdk_t, fdk_rmse, fdk_ssim),
     ("Hybrid IR", t_hybrid, r_hybrid, s_hybrid),
     ("TV-OS-SART x" + str(best_tv["n"]), best_tv["t"], best_tv["rmse"], best_tv["ssim"]),
+
 ]
 
 # ========== 可视化 ==========
@@ -296,7 +300,7 @@ ax_z.grid(True, alpha=0.3)
 
 plt.suptitle(
     f"TIGRE CUDA Helical Cone-beam (512x512x32, {n_angles}角度, pitch={pitch}mm, blocksize={blocksize})\n"
-    f"+ Hybrid IR (OS-SART×3+TV+FDK混合)\n{ts}",
+    f"+ Hybrid IR (OS-SART\u00d73+TV+FDK\u6df7\u5408)\n{ts}",
     fontsize=12, fontweight="bold", y=0.98
 )
 plt.savefig("img_3d_helical/tigre_cone_hybrid.png", dpi=150, bbox_inches="tight")

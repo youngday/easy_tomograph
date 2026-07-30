@@ -15,12 +15,12 @@
     "Hybrid IR": {
       "rmse": 0.00161,
       "ssim": 0.9817,
-      "time_ms": 5897.2
+      "time_ms": 6029.6
     },
     "TV-OS-SART x10": {
       "rmse": 0.00076,
       "ssim": 0.996,
-      "time_ms": 9273.4
+      "time_ms": 9294.1
     }
   },
   "z_profile": {

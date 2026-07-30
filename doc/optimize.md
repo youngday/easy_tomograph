@@ -1,5 +1,7 @@
 # optimize
 
+## optimize #008
+os3+tv1+fdk speed up ,but rmse down
 ## optimize #007 tv beta
 
 ```
