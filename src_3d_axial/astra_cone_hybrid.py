@@ -21,6 +21,29 @@ except ImportError:
     print("错误: 需要 ASTRA Toolbox")
     exit(1)
 
+# TV 去噪: GPU (CuPy) → CPU 回退
+try:
+    from tv_gpu import tv_denoise_gpu as _tv_denoise_gpu
+    _USE_GPU_TV = True
+except Exception:
+    _USE_GPU_TV = False
+
+def tv_denoise(v, beta, w_z=1.5, **kwargs):
+    if _USE_GPU_TV:
+        try:
+            return _tv_denoise_gpu(v, beta, w_z=w_z)
+        except Exception:
+            pass
+    # CPU fallback
+    dx=np.zeros_like(v);dy=np.zeros_like(v);dz=np.zeros_like(v)
+    dx[:,:,:-1]=v[:,:,1:]-v[:,:,:-1];dy[:,:-1,:]=v[:,1:,:]-v[:,:-1,:];dz[:-1,:,:]=v[1:,:,:]-v[:-1,:,:]
+    mag=np.sqrt(dx**2+dy**2+(w_z*dz)**2+1e-8);ux,uy,uz=dx/mag,dy/mag,w_z*dz/mag
+    div=np.zeros_like(v)
+    div[:,:,1:-1]=ux[:,:,1:-1]-ux[:,:,:-2];div[:,:,0]=ux[:,:,0];div[:,:,-1]=-ux[:,:,-2]
+    div[:,1:-1,:]+=uy[:,1:-1,:]-uy[:,:-2,:];div[:,0,:]+=uy[:,0,:];div[:,-1,:]+=-uy[:,-2,:]
+    div[1:-1,:,:]+=uz[1:-1,:,:]-uz[:-2,:,:];div[0,:,:]+=uz[0,:,:];div[-1,:,:]+=-uz[-2,:,:]
+    return v - beta * (-div)
+
 print("=" * 60)
 print("FBP + IR 混合重建  [锥束 CBCT | ASTRA CUDA]")
 print("=" * 60)
@@ -162,16 +185,6 @@ np.random.seed(2024)
 sino_noisy = add_artifacts(sino, dose_level=0.5, hardening=False, rings=True, scatter=False)
 
 # TV 梯度算子
-def tv_gradient(v, eps=1e-8):
-    dx = np.zeros_like(v); dy = np.zeros_like(v); dz = np.zeros_like(v)
-    dx[:,:,:-1]=v[:,:,1:]-v[:,:,:-1]; dy[:,:-1,:]=v[:,1:,:]-v[:,:-1,:]; dz[:-1,:,:]=v[1:,:,:]-v[:-1,:,:]
-    mag = np.sqrt(dx**2+dy**2+dz**2+eps); ux,uy,uz = dx/mag, dy/mag, dz/mag
-    div = np.zeros_like(v)
-    div[:,:,1:-1]=ux[:,:,1:-1]-ux[:,:,:-2]; div[:,:,0]=ux[:,:,0]; div[:,:,-1]=-ux[:,:,-2]
-    div[:,1:-1,:]+=uy[:,1:-1,:]-uy[:,:-2,:]; div[:,0,:]+=uy[:,0,:]; div[:,-1,:]+=-uy[:,-2,:]
-    div[1:-1,:,:]+=uz[1:-1,:,:]-uz[:-2,:,:]; div[0,:,:]+=uz[0,:,:]; div[-1,:,:]+=-uz[-2,:,:]
-    return -div
-
 n_subsets = 10
 sub_size = n_angles // n_subsets
 
@@ -216,7 +229,7 @@ for ni, beta in zip([1, 3, 5, 10], [0.003, 0.002, 0.001, 0.0005]):
     dn = ni - prev_n
     t0 = time()
     rec_tv = fast_sirt(rec_tv, dn)
-    rec_tv = rec_tv - beta * tv_gradient(rec_tv)
+    rec_tv = tv_denoise(rec_tv, beta, w_z=1.5)
     t = time() - t0
     r, s = calc_rmse(linear_scale(rec_tv)), calc_ssim(linear_scale(rec_tv))
     if r < best_tv["rmse"]: best_tv = {"rmse": r, "ssim": s, "rec": linear_scale(rec_tv), "t": t, "n": ni}
@@ -232,7 +245,7 @@ print("-" * 55)
 t0 = time()
 rec_hybrid = rec_fdk_n.copy()
 rec_hybrid = fast_sirt(rec_hybrid, 3)
-rec_hybrid = rec_hybrid - 0.003 * tv_gradient(rec_hybrid)
+rec_hybrid = tv_denoise(rec_hybrid, 0.003, w_z=1.5)
 rec_hybrid = 0.5 * rec_hybrid + 0.5 * rec_fdk_n
 t_hybrid = time() - t0
 r_hybrid, s_hybrid = calc_rmse(linear_scale(rec_hybrid)), calc_ssim(linear_scale(rec_hybrid))

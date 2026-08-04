@@ -47,3 +47,8 @@ https://github.com/msminhas93/nviwatch
 cargo install nviwatch
 
 nviwatch
+
+
+## cupy
+
+uv pip install cupy-cuda12x 2>&1 | tail -5

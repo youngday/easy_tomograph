@@ -23,6 +23,29 @@ except ImportError:
     print("错误: 需要 ASTRA Toolbox")
     exit(1)
 
+# TV 去噪: GPU (CuPy) → CPU 回退
+try:
+    from tv_gpu import tv_denoise_gpu as _tv_denoise_gpu
+    _USE_GPU_TV = True
+except Exception:
+    _USE_GPU_TV = False
+
+def tv_denoise(v, beta, w_z=1.5, **kwargs):
+    if _USE_GPU_TV:
+        try:
+            return _tv_denoise_gpu(v, beta, w_z=w_z)
+        except Exception:
+            pass
+    # CPU fallback
+    dx=np.zeros_like(v);dy=np.zeros_like(v);dz=np.zeros_like(v)
+    dx[:,:,:-1]=v[:,:,1:]-v[:,:,:-1];dy[:,:-1,:]=v[:,1:,:]-v[:,:-1,:];dz[:-1,:,:]=v[1:,:,:]-v[:-1,:,:]
+    mag=np.sqrt(dx**2+dy**2+(w_z*dz)**2+1e-8);ux,uy,uz=dx/mag,dy/mag,w_z*dz/mag
+    div=np.zeros_like(v)
+    div[:,:,1:-1]=ux[:,:,1:-1]-ux[:,:,:-2];div[:,:,0]=ux[:,:,0];div[:,:,-1]=-ux[:,:,-2]
+    div[:,1:-1,:]+=uy[:,1:-1,:]-uy[:,:-2,:];div[:,0,:]+=uy[:,0,:];div[:,-1,:]+=-uy[:,-2,:]
+    div[1:-1,:,:]+=uz[1:-1,:,:]-uz[:-2,:,:];div[0,:,:]+=uz[0,:,:];div[-1,:,:]+=-uz[-2,:,:]
+    return v - beta * (-div)
+
 print("=" * 60)
 print("螺旋(Helical) CBCT 混合重建  [ASTRA CUDA | 优化版]")
 print("=" * 60)
@@ -167,22 +190,6 @@ sino_noisy = add_artifacts(sino, dose_level=0.5, hardening=False, rings=True, sc
 
 best_c = {"rmse": 1e9}
 
-# ---- 各向异性 TV 梯度 (GPU友好) ----
-def tv_gradient(v, w_z=1.5, out=None, eps=1e-8):
-    """各向异性 TV 梯度, 支持输出缓冲区复用"""
-    if out is None:
-        dx = np.zeros_like(v); dy = np.zeros_like(v); dz = np.zeros_like(v)
-    else:
-        dx = out; dy = out; dz = out  # 不能复用, 跳过
-        dx = np.zeros_like(v); dy = np.zeros_like(v); dz = np.zeros_like(v)
-    dx[:,:,:-1]=v[:,:,1:]-v[:,:,:-1]; dy[:,:-1,:]=v[:,1:,:]-v[:,:-1,:]; dz[:-1,:,:]=v[1:,:,:]-v[:-1,:,:]
-    mag = np.sqrt(dx**2+dy**2+(w_z*dz)**2+eps); ux,uy,uz = dx/mag, dy/mag, w_z*dz/mag
-    div = np.zeros_like(v)
-    div[:,:,1:-1]=ux[:,:,1:-1]-ux[:,:,:-2]; div[:,:,0]=ux[:,:,0]; div[:,:,-1]=-ux[:,:,-2]
-    div[:,1:-1,:]+=uy[:,1:-1,:]-uy[:,:-2,:]; div[:,0,:]+=uy[:,0,:]; div[:,-1,:]+=-uy[:,-2,:]
-    div[1:-1,:,:]+=uz[1:-1,:,:]-uz[:-2,:,:]; div[0,:,:]+=uz[0,:,:]; div[-1,:,:]+=-uz[-2,:,:]
-    return -div
-
 # ---- 预分配 ASTRA 对象 (避免反复 create/delete) ----
 print("预分配 ASTRA 子集对象...")
 t0_pre = time()
@@ -246,7 +253,7 @@ for ni, beta in zip(tv_niters, tv_betas):
                 astra.data3d.store(rid, rec_tv)
                 astra.algorithm.run(alg, 1)
                 rec_tv = astra.data3d.get(rid).copy()
-            rec_tv = rec_tv - beta * tv_gradient(rec_tv, w_z=w_z)
+            rec_tv = tv_denoise(rec_tv, beta, w_z=1.5)
         rec_tv = 0.95 * rec_tv + 0.05 * rec_fdk_n
     t = time() - t0
     r, s = calc_rmse(linear_scale(rec_tv)), calc_ssim(linear_scale(rec_tv))
@@ -271,7 +278,7 @@ print("-" * 55)
 t0 = time()
 rec_hybrid = rec_fdk_n.copy()
 rec_hybrid = fast_ossart(rec_hybrid, 3)
-rec_hybrid = rec_hybrid - 0.003 * tv_gradient(rec_hybrid, w_z=1.5)
+rec_hybrid = tv_denoise(rec_hybrid, 0.003, w_z=1.5)
 rec_hybrid = 0.5 * rec_hybrid + 0.5 * rec_fdk_n
 t_hybrid = time() - t0
 r_hybrid, s_hybrid = calc_rmse(linear_scale(rec_hybrid)), calc_ssim(linear_scale(rec_hybrid))

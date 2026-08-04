@@ -23,6 +23,29 @@ except ImportError:
     print("错误: 需要 TIGRE Toolbox (GPU 版本)")
     exit(1)
 
+# TV 梯度: GPU (CuPy) → CPU 回退
+try:
+    from tv_gpu import tv_gradient_gpu as _tv_gradient_gpu
+    _USE_GPU_TV = True
+except Exception:
+    _USE_GPU_TV = False
+
+def tv_gradient(v, w_z=1.5, eps=1e-8):
+    if _USE_GPU_TV:
+        try:
+            return _tv_gradient_gpu(v, w_z=w_z, eps=eps)
+        except Exception:
+            pass
+    # CPU fallback
+    dx=np.zeros_like(v);dy=np.zeros_like(v);dz=np.zeros_like(v)
+    dx[:,:,:-1]=v[:,:,1:]-v[:,:,:-1];dy[:,:-1,:]=v[:,1:,:]-v[:,:-1,:];dz[:-1,:,:]=v[1:,:,:]-v[:-1,:,:]
+    mag=np.sqrt(dx**2+dy**2+(w_z*dz)**2+eps);ux,uy,uz=dx/mag,dy/mag,w_z*dz/mag
+    div=np.zeros_like(v)
+    div[:,:,1:-1]=ux[:,:,1:-1]-ux[:,:,:-2];div[:,:,0]=ux[:,:,0];div[:,:,-1]=-ux[:,:,-2]
+    div[:,1:-1,:]+=uy[:,1:-1,:]-uy[:,:-2,:];div[:,0,:]+=uy[:,0,:];div[:,-1,:]+=-uy[:,-2,:]
+    div[1:-1,:,:]+=uz[1:-1,:,:]-uz[:-2,:,:];div[0,:,:]+=uz[0,:,:];div[-1,:,:]+=-uz[-2,:,:]
+    return -div
+
 print("=" * 60)
 print("FBP + IR 混合重建对比  [锥束 CBCT | TIGRE CUDA 优化]")
 print("=" * 60)
@@ -140,15 +163,7 @@ from ct_noise import add_artifacts
 np.random.seed(2024)
 sino_noisy = add_artifacts(sino, dose_level=0.5, hardening=False, rings=True, scatter=False)
 
-def tv_gradient(v, eps=1e-8):
-    dx = np.zeros_like(v); dy = np.zeros_like(v); dz = np.zeros_like(v)
-    dx[:,:,:-1] = v[:,:,1:]-v[:,:,:-1]; dy[:,:-1,:] = v[:,1:,:]-v[:,:-1,:]; dz[:-1,:,:] = v[1:,:,:]-v[:-1,:,:]
-    mag = np.sqrt(dx**2+dy**2+dz**2+eps); ux,uy,uz = dx/mag, dy/mag, dz/mag
-    div = np.zeros_like(v)
-    div[:,:,1:-1] = ux[:,:,1:-1]-ux[:,:,:-2]; div[:,:,0]=ux[:,:,0]; div[:,:,-1]=-ux[:,:,-2]
-    div[:,1:-1,:] += uy[:,1:-1,:]-uy[:,:-2,:]; div[:,0,:]+=uy[:,0,:]; div[:,-1,:]+=-uy[:,-2,:]
-    div[1:-1,:,:] += uz[1:-1,:,:]-uz[:-2,:,:]; div[0,:,:]+=uz[0,:,:]; div[-1,:,:]+=-uz[-2,:,:]
-    return -div
+
 
 rec_fdk_noisy = algs.fdk(sino_noisy, geo, angles, filter="hann")
 
@@ -159,7 +174,7 @@ prev_n = 0
 for ni, beta in zip([1, 3, 5, 10], [0.003, 0.002, 0.001, 0.0005]):
     dn = ni - prev_n
     t0 = time(); rec_tv = algs.ossart(sino_noisy, geo, angles, niter=dn, init=rec_tv, blocksize=36, verbose=False)
-    rec_tv = rec_tv - beta * tv_gradient(rec_tv)
+    rec_tv = rec_tv - beta * tv_gradient(rec_tv, w_z=1.5)
     t = time() - t0; r, s = calc_rmse(linear_scale(rec_tv)), calc_ssim(linear_scale(rec_tv))
     tv_hist.append((ni, t, r, s))
     if r < best_tv["rmse"]: best_tv = {"rmse": r, "ssim": s, "rec": linear_scale(rec_tv), "t": t, "n": ni}

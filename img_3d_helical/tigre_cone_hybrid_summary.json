@@ -11,17 +11,17 @@
     "Pure FDK": {
       "rmse": 0.00084,
       "ssim": 0.9951,
-      "time_ms": 395.0
+      "time_ms": 408.0
     },
     "Hybrid IR": {
       "rmse": 0.00161,
       "ssim": 0.9818,
-      "time_ms": 5881.6
+      "time_ms": 6265.8
     },
     "TV-OS-SART x10": {
       "rmse": 0.00099,
       "ssim": 0.9932,
-      "time_ms": 8814.3
+      "time_ms": 10087.1
     }
   },
   "z_profile": {

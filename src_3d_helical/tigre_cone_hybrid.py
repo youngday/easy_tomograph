@@ -23,6 +23,29 @@ except ImportError:
     print("错误: 需要 TIGRE Toolbox (GPU 版本)")
     exit(1)
 
+# TV 梯度: GPU (CuPy) → CPU 回退
+try:
+    from tv_gpu import tv_gradient_gpu as _tv_gradient_gpu
+    _USE_GPU_TV = True
+except Exception:
+    _USE_GPU_TV = False
+
+def tv_gradient(v, w_z=1.5, eps=1e-8):
+    if _USE_GPU_TV:
+        try:
+            return _tv_gradient_gpu(v, w_z=w_z, eps=eps)
+        except Exception:
+            pass
+    # CPU fallback
+    dx=np.zeros_like(v);dy=np.zeros_like(v);dz=np.zeros_like(v)
+    dx[:,:,:-1]=v[:,:,1:]-v[:,:,:-1];dy[:,:-1,:]=v[:,1:,:]-v[:,:-1,:];dz[:-1,:,:]=v[1:,:,:]-v[:-1,:,:]
+    mag=np.sqrt(dx**2+dy**2+(w_z*dz)**2+eps);ux,uy,uz=dx/mag,dy/mag,w_z*dz/mag
+    div=np.zeros_like(v)
+    div[:,:,1:-1]=ux[:,:,1:-1]-ux[:,:,:-2];div[:,:,0]=ux[:,:,0];div[:,:,-1]=-ux[:,:,-2]
+    div[:,1:-1,:]+=uy[:,1:-1,:]-uy[:,:-2,:];div[:,0,:]+=uy[:,0,:];div[:,-1,:]+=-uy[:,-2,:]
+    div[1:-1,:,:]+=uz[1:-1,:,:]-uz[:-2,:,:];div[0,:,:]+=uz[0,:,:];div[-1,:,:]+=-uz[-2,:,:]
+    return -div
+
 print("=" * 60)
 print("螺旋(Helical) CBCT 混合重建对比  [TIGRE CUDA 优化版]")
 print("=" * 60)
@@ -143,47 +166,11 @@ sino_noisy = add_artifacts(sino, dose_level=0.5, hardening=False, rings=True, sc
 # 有噪声 FDK 初始化
 rec_fdk_noisy = algs.fdk(sino_noisy, geo, angles, filter="hann")
 
-# ---- TV 梯度 (预分配缓存) ----
-class TVGradientCache:
-    """预分配所有中间缓冲区, 避免反复 malloc"""
-    def __init__(self, shape, w_z=1.5):
-        self.dx = np.zeros(shape, dtype=np.float32)
-        self.dy = np.zeros(shape, dtype=np.float32)
-        self.dz = np.zeros(shape, dtype=np.float32)
-        self.div = np.zeros(shape, dtype=np.float32)
-        self.w_z = w_z
-    def compute(self, v, beta, eps=1e-8):
-        dx, dy, dz, div = self.dx, self.dy, self.dz, self.div
-        # 清零
-        dx[:,:,:-1] = 0; dy[:,:-1,:] = 0; dz[:-1,:,:] = 0
-        div[:] = 0
-        # 梯度
-        np.subtract(v[:,:,1:], v[:,:,:-1], out=dx[:,:,:-1])
-        np.subtract(v[:,1:,:], v[:,:-1,:], out=dy[:,:-1,:])
-        np.subtract(v[1:,:,:], v[:-1,:,:], out=dz[:-1,:,:])
-        # 各向异性 z
-        dz *= self.w_z
-        mag = np.sqrt(dx*dx + dy*dy + dz*dz + eps)
-        np.divide(dx, mag, out=dx, where=mag>eps)
-        np.divide(dy, mag, out=dy, where=mag>eps)
-        np.divide(dz, mag, out=dz, where=mag>eps)
-        # 散度 (原地累加)
-        div[:,:,1:-1] = dx[:,:,1:-1] - dx[:,:,:-2]
-        div[:,:,0] = dx[:,:,0]; div[:,:,-1] = -dx[:,:,-2]
-        div[:,1:-1,:] += dy[:,1:-1,:] - dy[:,:-2,:]
-        div[:,0,:] += dy[:,0,:]; div[:,-1,:] += -dy[:,-2,:]
-        div[1:-1,:,:] += dz[1:-1,:,:] - dz[:-2,:,:]
-        div[0,:,:] += dz[0,:,:]; div[-1,:,:] += -dz[-2,:,:]
-        # v - β*(-div) = v + β*div
-        np.add(v, beta * div, out=v)
-        return v
-
 t0 = time()
 rec_hybrid = rec_fdk_noisy.copy()
 rec_hybrid = algs.ossart(sino_noisy, geo, angles, niter=3, init=rec_hybrid,
                          blocksize=blocksize, verbose=False)
-tv_cache_hybrid = TVGradientCache((nz, N, N), w_z=1.5)
-rec_hybrid = tv_cache_hybrid.compute(rec_hybrid, 0.003)
+rec_hybrid = rec_hybrid - 0.003 * tv_gradient(rec_hybrid, w_z=1.5)
 rec_hybrid = 0.5 * rec_hybrid + 0.5 * rec_fdk_noisy
 t_hybrid = time() - t0
 r_hybrid, s_hybrid = calc_rmse(linear_scale(rec_hybrid)), calc_ssim(linear_scale(rec_hybrid))
@@ -196,7 +183,6 @@ print(f"   z-profile: mean={hybrid_zprof.mean():.5f}")
 print("-" * 55)
 print(f"C. TV-OS-SART (缓存TV, bs={blocksize})")
 print("-" * 55)
-tv_cache = TVGradientCache((nz, N, N), w_z=1.5)
 rec_tv = rec_fdk_noisy.copy()
 best_tv = {"rmse": 1e9, "ssim": -1, "rec": None, "t": 0, "n": 0}
 prev_n = 0
@@ -209,8 +195,8 @@ for ni, beta in zip(tv_niters, tv_betas):
     # ossart 合并调用
     rec_tv = algs.ossart(sino_noisy, geo, angles, niter=dn, init=rec_tv,
                          blocksize=blocksize, verbose=False)
-    # TV (预分配缓存, 原地操作)
-    rec_tv = tv_cache.compute(rec_tv, beta)
+    # TV 去噪 (GPU/CuPy → CPU 回退)
+    rec_tv = rec_tv - beta * tv_gradient(rec_tv, w_z=1.5)
     # FDK 稳定化
     rec_tv *= 0.95; rec_tv += 0.05 * rec_fdk_noisy
     t = time() - t0
@@ -224,8 +210,6 @@ tv_improv = (1 - best_tv['rmse'] / fdk_rmse) * 100
 print(f"   TV 改善: {tv_improv:+.1f}%")
 best_tv_zprof = calc_z_profile(best_tv["rec"])
 print(f"   z-profile: mean={best_tv_zprof.mean():.5f}")
-
-
 
 # ========== D. 汇总 ==========
 print("\n" + "=" * 70)
