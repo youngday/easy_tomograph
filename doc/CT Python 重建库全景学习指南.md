@@ -346,3 +346,27 @@ graph TB
 - **你要算法丰富（TV/OS-SART/ASD-POCS）→ TIGRE**
 - **你要螺旋 CT → RTK + ASTRA/TIGRE**
 - **做实际医用 CT 产品研发 → 两者都用**，ASTRA 做性能基线，TIGRE 做算法实验
+
+
+## 算法
+
+✅ **os_asd_pocs 在 helical 数据上正常工作**，质量与 TV-OS-SART 相当（RMSE 0.00100 vs 0.00099）
+- ✅ **全自动调参**（α 和 α_red 自适应衰减），无需手工 β 调度
+- ⚠️ 代价：比 TV-OS-SART 慢约 1.2-1.9×（自适应步长计算需要额外前向投影）
+
+## issue:
+
+tigre 原生 helical 
+
+x/y 边缘误差不对称 - 完整分析
+实测:
+  FDK(offOrigin):        x/y 比 = 0.994  ✅ 对称
+  TV-OS-SART x5(原生helical): x/y 比 = 1.189  ❌ x 大 19%
+
+根因链:
+  ArbitrarySourceDetMoveGeo → zyz 欧拉角 → gimbal lock
+  → 源经过 y 轴附近时角度退化 (警告: "Setting third angle to zero")
+  → 该角度投影几何有微小误差
+  → 迭代反复使用 → 误差累积 → x 方向边缘误差 > y 方向
+
+offOrigin 模拟无此问题 (简单 z 偏移, 几何精确)

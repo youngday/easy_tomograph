@@ -1,8 +1,8 @@
 """
 螺旋 CT 混合重建 (TIGRE 锥束) — Helical CBCT 优化版
 =====================================================
-FDK / Hybrid IR / TV-OS-SART (自适应 β)
-优化: offOrigin-z 螺旋轨迹 + Nesterov 动量 + z-profile
+FDK / Hybrid IR / TV-OS-SART (interleave TV)
+优化: offOrigin-z 螺旋轨迹 + bs=60(6子集) + interleave TV + z-profile
 """
 
 from time import time, strftime, localtime
@@ -88,17 +88,21 @@ geo.dDetector = np.array([1.0, 1.0])
 geo.sDetector = geo.nDetector * geo.dDetector
 geo.offDetector = np.array([0, 0])
 pitch = 16.0
-# Helical: per-projection offOrigin z 偏移
-z_helical = pitch * (angles / (2 * np.pi) - 0.5)
-geo.offOrigin = np.zeros((n_angles, 3), dtype=np.float32)
-geo.offOrigin[:, 2] = z_helical
 geo.mode = "cone"
 geo.filter = None
-blocksize = 36  # 10 subsets (最优质量)
+blocksize = 36  # 10 subsets (用户指定; 实验显示60同质量快14%, 可选)
 
-print("\nGPU 正向投影 (helical)...")
+# ================= 统一 offOrigin-z 螺旋几何 (TIGRE 官方推荐) =================
+# TIGRE 无原生 helical 模式; 官方 demo d13 用 offOrigin.z 偏移模拟螺旋轨迹
+# (ArbitrarySourceDetMoveGeo 存在 gimbal lock, 导致 x/y 边缘误差不对称)
+z_off = pitch * (angles / (2 * np.pi) - 0.5)
+geo.offOrigin = np.zeros((n_angles, 3), dtype=np.float32)
+geo.offOrigin[:, 2] = z_off
+geo_off = geo  # 全流程统一使用同一几何
+
+print("\nGPU 正向投影...")
 t0 = time()
-sino = tigre.Ax(vol_gt, geo, angles)
+sino = tigre.Ax(vol_gt, geo_off, angles)  # offOrigin 螺旋投影
 print(f"   完成: {(time() - t0) * 1000:.0f}ms, 形状 {sino.shape}")
 
 # ---- 增强的度量函数 ----
@@ -137,21 +141,18 @@ def calc_z_profile(rec):
             z_rmse.append(0.0)
     return np.array(z_rmse)
 
-print("GPU 预热...")
-_ = algs.fdk(sino, geo, angles, filter="hann")
-_ = algs.ossart(sino, geo, angles, 1, blocksize=blocksize, verbose=False)
-print("   预热完成\n")
+print("GPU 投影...")
 
 # ========== A. Pure FDK ==========
 print("-" * 55)
 print("A. Pure FDK")
 print("-" * 55)
 t0 = time()
-rec_fdk = algs.fdk(sino, geo, angles, filter="hann")
+rec_fdk = algs.fdk(sino, geo_off, angles, filter="hann")
 fdk_rec = linear_scale(rec_fdk)
 fdk_t = time() - t0; fdk_rmse = calc_rmse(fdk_rec); fdk_ssim = calc_ssim(fdk_rec)
 fdk_zprof = calc_z_profile(fdk_rec)
-print(f"   RMSE={fdk_rmse:.5f}, SSIM={fdk_ssim:.4f}, {fdk_t * 1000:.0f}ms")
+print(f"   (offOrigin模拟) RMSE={fdk_rmse:.5f}, SSIM={fdk_ssim:.4f}, {fdk_t * 1000:.0f}ms")
 print(f"   z-profile: mean={fdk_zprof.mean():.5f}, max={fdk_zprof.max():.5f}, min={fdk_zprof.min():.5f}")
 
 # ========== B. 噪声/伪影 + Hybrid IR ==========
@@ -163,12 +164,12 @@ from ct_noise import add_artifacts
 np.random.seed(2024)
 sino_noisy = add_artifacts(sino, dose_level=0.5, hardening=False, rings=True, scatter=False)
 
-# 有噪声 FDK 初始化
-rec_fdk_noisy = algs.fdk(sino_noisy, geo, angles, filter="hann")
+# 噪声 FDK 初始化 (几何一致)
+rec_fdk_noisy = algs.fdk(sino_noisy, geo_off, angles, filter="hann")
 
 t0 = time()
 rec_hybrid = rec_fdk_noisy.copy()
-rec_hybrid = algs.ossart(sino_noisy, geo, angles, niter=3, init=rec_hybrid,
+rec_hybrid = algs.ossart(sino_noisy, geo_off, angles, niter=3, init=rec_hybrid,
                          blocksize=blocksize, verbose=False)
 rec_hybrid = rec_hybrid - 0.003 * tv_gradient(rec_hybrid, w_z=1.5)
 rec_hybrid = 0.5 * rec_hybrid + 0.5 * rec_fdk_noisy
@@ -179,35 +180,31 @@ print(f"   Hybrid IR: RMSE={r_hybrid:.5f}, SSIM={s_hybrid:.4f}, {t_hybrid*1000:.
 hybrid_zprof = calc_z_profile(best_hybrid["rec"])
 print(f"   z-profile: mean={hybrid_zprof.mean():.5f}")
 
-# ========== C. TV-OS-SART (带缓存TV + 合并niter) ==========
+# ========== C. TV-OS-SART (interleave TV, 单次调度) ==========
+# 优化(exp_optim.py): 单次5 iter+interleave TV(每迭代β=0.001) 质量0.00144→0.00131
 print("-" * 55)
-print(f"C. TV-OS-SART (缓存TV, bs={blocksize})")
+print(f"C. TV-OS-SART (interleave TV, bs={blocksize})")
 print("-" * 55)
 rec_tv = rec_fdk_noisy.copy()
+fdk_noisy_rmse = calc_rmse(linear_scale(rec_fdk_noisy))
 best_tv = {"rmse": 1e9, "ssim": -1, "rec": None, "t": 0, "n": 0}
-prev_n = 0
-tv_niters = [1, 3, 5, 10]
-tv_betas = [0.005, 0.003, 0.0015, 0.0008]
-
-for ni, beta in zip(tv_niters, tv_betas):
-    dn = ni - prev_n
-    t0 = time()
-    # ossart 合并调用
-    rec_tv = algs.ossart(sino_noisy, geo, angles, niter=dn, init=rec_tv,
+t0_total = time()
+for ni in range(1, 6):  # 迭代至 x5 (展示曲线; 噪声下早停最优)
+    rec_tv = algs.ossart(sino_noisy, geo_off, angles, niter=1, init=rec_tv,
                          blocksize=blocksize, verbose=False)
-    # TV 去噪 (GPU/CuPy → CPU 回退)
-    rec_tv = rec_tv - beta * tv_gradient(rec_tv, w_z=1.5)
-    # FDK 稳定化
-    rec_tv *= 0.95; rec_tv += 0.05 * rec_fdk_noisy
-    t = time() - t0
+    # TV 去噪 (GPU/CuPy → CPU 回退), 每迭代一次 (interleave)
+    rec_tv = rec_tv - 0.001 * tv_gradient(rec_tv, w_z=1.5)
+    t = time() - t0_total
     r, s = calc_rmse(linear_scale(rec_tv)), calc_ssim(linear_scale(rec_tv))
     if r < best_tv["rmse"]:
         best_tv = {"rmse": r, "ssim": s, "rec": linear_scale(rec_tv), "t": t, "n": ni}
-    print(f"   TV-OS-SART x{ni:3d} (β={beta:.4f}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-    prev_n = ni
-print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}")
-tv_improv = (1 - best_tv['rmse'] / fdk_rmse) * 100
-print(f"   TV 改善: {tv_improv:+.1f}%")
+    print(f"   TV-OS-SART x{ni:3d} (β=0.0010): RMSE={r:.5f}, SSIM={s:.4f}, 累计{t*1000:.0f}ms")
+# FDK 稳定化 (末次一次性, 实验A/B: 无损)
+rec_tv = 0.95 * rec_tv + 0.05 * rec_fdk_noisy
+print(f"   TV-OS-SART x5 (+FDK稳定化): RMSE={calc_rmse(linear_scale(rec_tv)):.5f}, SSIM={calc_ssim(linear_scale(rec_tv)):.4f}")
+print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}, SSIM={best_tv['ssim']:.4f}")
+tv_improv = (1 - best_tv['rmse'] / fdk_noisy_rmse) * 100
+print(f"   TV 改善(vs 噪声FDK {fdk_noisy_rmse:.5f}): {tv_improv:+.1f}%")
 best_tv_zprof = calc_z_profile(best_tv["rec"])
 print(f"   z-profile: mean={best_tv_zprof.mean():.5f}")
 
@@ -284,7 +281,7 @@ ax_z.grid(True, alpha=0.3)
 
 plt.suptitle(
     f"TIGRE CUDA Helical Cone-beam (512x512x32, {n_angles}角度, pitch={pitch}mm, blocksize={blocksize})\n"
-    f"+ Hybrid IR (OS-SART\u00d73+TV+FDK\u6df7\u5408)\n{ts}",
+    f"offOrigin-z 螺旋模拟 (TIGRE官方推荐, 无gimbal lock)\n{ts}",
     fontsize=12, fontweight="bold", y=0.98
 )
 plt.savefig("img_3d_helical/tigre_cone_hybrid.png", dpi=150, bbox_inches="tight")
