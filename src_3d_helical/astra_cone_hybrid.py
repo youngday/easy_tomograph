@@ -52,7 +52,7 @@ print("=" * 60)
 
 N = 512
 nz = 32
-n_angles = 360
+n_angles = 180
 
 import tomophantom
 from tomophantom import TomoP3D
@@ -156,6 +156,7 @@ sid_w = astra.data3d.create("-sino", proj_geom, sino)
 rid_w = astra.data3d.create("-vol", vol_geom)
 c = astra.astra_dict("FDK_CUDA")
 c["ProjectionDataId"] = sid_w; c["ReconstructionDataId"] = rid_w
+c["option"] = {"FilterType": "hann"}  # 与TIGRE filter=hann对齐 (ram-lak噪声放大2倍, 见exp_fdk_noise)
 a = astra.algorithm.create(c); astra.algorithm.run(a, 1); astra.algorithm.delete(a)
 astra.data3d.delete(rid_w); astra.data3d.delete(sid_w)
 print("   预热完成\n")
@@ -171,6 +172,7 @@ sid_fdk = astra.data3d.create("-sino", proj_geom, sino)
 rid_fdk = astra.data3d.create("-vol", vol_geom)
 c = astra.astra_dict("FDK_CUDA")
 c["ProjectionDataId"] = sid_fdk; c["ReconstructionDataId"] = rid_fdk
+c["option"] = {"FilterType": "hann"}  # 与TIGRE filter=hann对齐
 a = astra.algorithm.create(c); astra.algorithm.run(a)
 fdk_raw = astra.data3d.get(rid_fdk).copy()
 astra.algorithm.delete(a); astra.data3d.delete(rid_fdk); astra.data3d.delete(sid_fdk)
@@ -214,9 +216,11 @@ sid_n = astra.data3d.create("-sino", proj_geom, sino_noisy)
 rid_n = astra.data3d.create("-vol", vol_geom)
 c = astra.astra_dict("FDK_CUDA")
 c["ProjectionDataId"] = sid_n; c["ReconstructionDataId"] = rid_n
+c["option"] = {"FilterType": "hann"}  # 与TIGRE filter=hann对齐
 a = astra.algorithm.create(c); astra.algorithm.run(a)
 rec_fdk_n = astra.data3d.get(rid_n).copy()
 astra.algorithm.delete(a); astra.data3d.delete(rid_n); astra.data3d.delete(sid_n)
+fdk_noisy_rmse = calc_rmse(linear_scale(rec_fdk_n))
 
 # ===== OS-SART 快速函数 (复用ASTRA对象) =====
 def fast_ossart(rec, n_step=1):
@@ -238,48 +242,43 @@ print("-" * 55)
 
 best_tv = {"rmse": 1e9}
 rec_tv = rec_fdk_n.copy()
-prev_n = 0
-tv_niters = [1, 3, 5, 10]
-tv_betas = [0.005, 0.003, 0.0015, 0.0008]
+beta0, decay = 0.002, 0.8  # β递减: 0.002→0.0003@x10 (interleave, 与TIGRE/Hybrid一致)
 w_z = 1.5
+t_tv_total = 0.0  # 纯算法时间累计 (度量/打印不计入, 与Hybrid口径一致)
 
-for ni, beta in zip(tv_niters, tv_betas):
-    dn = ni - prev_n
+for ni in range(1, 11):  # 迭代至 x10 (ASTRA SIRT收敛慢)
     t0 = time()
-    if beta > 0:
-        for _ in range(dn):
-            rec_tv = rec_tv.astype(np.float32)
-            for _, sid, rid, alg in subset_algs:
-                astra.data3d.store(rid, rec_tv)
-                astra.algorithm.run(alg, 1)
-                rec_tv = astra.data3d.get(rid).copy()
-            rec_tv = tv_denoise(rec_tv, beta, w_z=1.5)
-        rec_tv = 0.95 * rec_tv + 0.05 * rec_fdk_n
-    t = time() - t0
+    rec_tv = rec_tv.astype(np.float32)
+    for _, sid, rid, alg in subset_algs:
+        astra.data3d.store(rid, rec_tv)
+        astra.algorithm.run(alg, 1)
+        rec_tv = astra.data3d.get(rid).copy()
+    rec_tv = tv_denoise(rec_tv, beta0 * decay ** (ni - 1), w_z=1.5)
+    t_tv_total += time() - t0
+    t = t_tv_total
     r, s = calc_rmse(linear_scale(rec_tv)), calc_ssim(linear_scale(rec_tv))
     if r < best_tv["rmse"]:
         best_tv = {"rmse": r, "ssim": s, "rec": linear_scale(rec_tv), "t": t, "n": ni}
-    print(f"   TV-OS-SART x{ni:3d} (β={beta:.4f}): RMSE={r:.5f}, SSIM={s:.4f}, {t*1000:.0f}ms")
-    prev_n = ni
+    print(f"   TV-OS-SART x{ni:3d} (β={beta0*decay**(ni-1):.4f}): RMSE={r:.5f}, SSIM={s:.4f}, 累计{t*1000:.0f}ms")
 
 # 清理 ASTRA 对象
 print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}")
-tv_improv = (1 - best_tv['rmse']/fdk_rmse) * 100
-print(f"   TV 改善: {tv_improv:+.1f}%")
+tv_improv = (1 - best_tv['rmse']/fdk_noisy_rmse) * 100
+print(f"   TV 改善 vs 噪声FDK({fdk_noisy_rmse:.5f}): {tv_improv:+.1f}%")
 best_tv_zprof = calc_z_profile(best_tv["rec"])
 print(f"   z-profile: mean={best_tv_zprof.mean():.5f}, max={best_tv_zprof.max():.5f}")
 
 # ============================
-# B. Fast Hybrid IR (OS3+TV1+FDK50%)
+# B. Fast Hybrid IR (OS10+TV10(β↓)+FDK10%) — 改进: SIRT3轮收敛不足→10轮; FDK50%→10%(ASTRA的FDK噪声大, 50%混合拉坏, 见exp_astra_hybrid)
 # ============================
-print("-" * 55)
-print("B. Hybrid IR (OS-SART×3 + TV×1 + FDK混合 50%)")
 print("-" * 55)
 t0 = time()
 rec_hybrid = rec_fdk_n.copy()
-rec_hybrid = fast_ossart(rec_hybrid, 3)
-rec_hybrid = tv_denoise(rec_hybrid, 0.003, w_z=1.5)
-rec_hybrid = 0.5 * rec_hybrid + 0.5 * rec_fdk_n
+beta0, decay = 0.002, 0.8  # β: 0.002→0.0003@x10
+for ni in range(10):
+    rec_hybrid = fast_ossart(rec_hybrid, 1)
+    rec_hybrid = tv_denoise(rec_hybrid, beta0 * decay ** ni, w_z=1.5)
+rec_hybrid = 0.9 * rec_hybrid + 0.1 * rec_fdk_n
 t_hybrid = time() - t0
 r_hybrid, s_hybrid = calc_rmse(linear_scale(rec_hybrid)), calc_ssim(linear_scale(rec_hybrid))
 best_hybrid = {"rec": linear_scale(rec_hybrid), "rmse": r_hybrid, "ssim": s_hybrid, "t": t_hybrid}
@@ -297,7 +296,7 @@ for pg, sid, rid, alg in subset_algs:
 # D. 汇总
 # ============================
 print("\n" + "=" * 70)
-print("汇总对比 (32x512x512, 360角度, 10子集)")
+print(f"汇总对比 (32x512x512, {n_angles}角度, {n_subsets}子集)")
 print("=" * 70)
 print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'z-RMSE':>10s}")
 print("-" * 72)
@@ -322,7 +321,7 @@ ts = strftime("%Y-%m-%d %H:%M:%S", localtime())
 titles_upper = [
     ("Ground Truth", vol_gt[mid], None, None, None, None),
     ("FDK", fdk_rec[mid], fdk_rmse, fdk_ssim, fdk_t, None),
-    ("Hybrid IR\nOS3+TV1+FDK50%", best_hybrid["rec"][mid], best_hybrid["rmse"], best_hybrid["ssim"], best_hybrid["t"], None),
+    ("Hybrid IR\nOS10+TV10(β↓)+FDK10%", best_hybrid["rec"][mid], best_hybrid["rmse"], best_hybrid["ssim"], best_hybrid["t"], None),
     ("TV-OS-SART", best_tv["rec"][mid], best_tv["rmse"], best_tv["ssim"], best_tv["t"], best_tv["n"]),
 ]
 for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
@@ -360,7 +359,7 @@ ax_z.legend(fontsize=8)
 ax_z.set_title("z-profile: 沿 z 方向逐片 RMSE", fontsize=10)
 ax_z.grid(True, alpha=0.3)
 
-plt.suptitle(f"ASTRA CUDA Helical Cone-beam (32x512x512, {n_angles}角度, pitch={pitch}mm, 10子集)\n+ Hybrid IR (OS-SART×3+TV+FDK混合)\n{ts}",
+plt.suptitle(f"ASTRA CUDA Helical Cone-beam (32x512x512, {n_angles}角度, pitch={pitch}mm, {n_subsets}子集)\n+ Hybrid IR (OS-SART×10+TV×10+FDK混合10%)\n{ts}",
              fontsize=12, fontweight="bold", y=0.98)
 plt.savefig("img_3d_helical/astra_cone_hybrid.png", dpi=150, bbox_inches="tight")
 plt.close()

@@ -24,17 +24,38 @@ fbp vs ir
 ## 2d fan hybrid
 sirt os-sart
 ### astra_hybrid.py
-![astra_hybrid](img_out/astra_hybrid.png)
+<!--![astra_hybrid](img_out/astra_hybrid.png)-->
 ### tigre_hybrid.py
-![tigre_hybrid](img_out/tigre_hybrid.png)
+<!--![tigre_hybrid](img_out/tigre_hybrid.png)-->
 
-## 3d cone hybrid
-sirt os-sart
+
+## axial cone hybrid
+tv-os-sart+fdk
+### fdk filter 
+![fdk_compare](img_3d_axial/fdk_compare.png)
 ### astra_cone_hybrid.py
 ![astra_cone_hybrid](img_3d_axial/astra_cone_hybrid.png)
 ### tigre_cone_hybrid.py
 tigre_hybrid
 ![tigre_cone_hybrid](img_3d_axial/tigre_cone_hybrid.png)
+
+## helical cone hybrid
+tv-os-sart+fdk
+### astra_cone_hybrid.py
+![astra_cone_hybrid](img_3d_helical/astra_cone_hybrid.png)
+### tigre_cone_hybrid.py
+tigre_hybrid
+![tigre_cone_hybrid](img_3d_helical/tigre_cone_hybrid.png)
+
+## result
+[optimize #010](doc/optimize.md)
+select astra.
+
+## TODO
+
+add production model
+clibration
+c++ code
 
 ## install
 

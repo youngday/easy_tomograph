@@ -1,5 +1,62 @@
 # optimize
-tv gpu #009
+
+## optimize #010
+基于修正后的最新数据（时间口径统一 + hann 滤波对齐），重新分析。
+
+## 修正后的公平对比数据（180°、hann、有噪声）
+
+| 指标 | TIGRE (helical/axial) | ASTRA (helical/axial) |
+|---|---|---|
+| 单次迭代 | ~1.2s | ~0.45s（2.7× 差距） |
+| 正向投影 | ~1.3s | ~0.5s |
+| 收敛轮数 | OS-SART 3-5 轮 | SIRT 需 ~10 轮 |
+| Hybrid IR | 0.00166 @ 3.7s | **0.00090 @ 4.8s** |
+| TV-OS-SART 最优 | 0.00136 @ x5 (6.0s) | **0.00081 @ x10 (5.0s)** |
+| 噪声 FDK | 0.00275 | 0.00278（滤波对齐后相同） |
+
+**关键变化**：滤波对齐前，ASTRA 的 FDK 差 2 倍 → 看似 ASTRA 不如 TIGRE 公平；对齐后，**同口径下 ASTRA 质量全面超越 TIGRE，且总时间更短**。
+
+## ASTRA 工业应用
+
+**优点**
+1. **内核性能**：单迭代 0.45s（TIGRE 2.7×），CUDA 内核工业级优化，吞吐高——直接决定产能（每小时可处理体数）
+2. **原生 helical**：`cone_vec` 12 向量直接描述任意轨迹（螺旋/有限角/偏心），无欧拉角 gimbal lock——64 排 CT 螺旋重建的正确几何模型
+3. **质量上限**：TV-OS-SART x10 = 0.00081，逼近无噪声极限（0.00087），修正滤波后噪声鲁棒
+4. **稳定性**：`SIRT3D_CUDA` 无已知 bug；C++ 核心 + Python 绑定，可嵌入式部署
+5. **许可**：BSD（宽松，可闭源商用）
+
+**缺点**
+1. **收敛慢**：只有 SIRT/ART/SART 类算法，无真正 OS-SART/ASD-POCS；SIRT 需 10 轮才收敛 → 迭代预算高
+2. **无内置 TV 正则化迭代算法**：TV/先验需自己封装（本项目已做：GPU TV 梯度）
+3. **API 工程负担**：几何/对象手动管理（create/delete），样板代码多，易泄漏
+4. **生态小**：文档/教程少于 TIGRE，社区小
+
+## TIGRE 工业应用
+
+**优点**
+1. **算法库丰富**：FDK/OS-SART/ASD-POCS/PICCS/CGLS/FISTA/MLEM 一应俱全（虽部分有 bug），适合研究对比
+2. **开发效率**：`algs.ossart()` 一行调用，demo 多、上手快
+3. **OS-SART 收敛快**：3-5 轮即有效（Hybrid 只用 3 轮 3.7s）
+4. **内置 TV/PICCS** 正则化
+
+**缺点**
+1. **内核慢**：单迭代 1.2s、投影 1.3s——大体积（512 层）按比例 ~16×，单例重建分钟级，难达临床吞吐
+2. **helical 无原生**：offOrigin 模拟（官方推荐但非真螺旋），`ArbitrarySourceDetMoveGeo` 有 gimbal lock/零向量 bug——螺旋产品验证受限
+3. **算法可靠性**：os_piccs（CUDA crash）、fista（float64）、ossart_tv（TV 归一化破坏收敛）、os_awasd（17s）——生产选型风险
+4. **维护节奏**：学术项目，3.1.2→3.1.3 无实质修复
+
+## 场景化取舍
+
+| 场景 | 推荐 | 理由 |
+|---|---|---|
+| 快速原型/算法对比 | **TIGRE** | API 简洁、算法全、3 轮出结果 |
+| 生产部署（质量+速度） | **ASTRA** | 内核快 2.7×、helical 原生、稳定；代价是封装 SIRT+TV 10 轮 |
+| helical 重建验证 | **ASTRA** | cone_vec 真螺旋，TIGRE 只能模拟 |
+| 全尺寸临床体（512³） | **都需自研** | 开源库单例分钟级；临床产品（ASiR-V/SAFIRE）是自研 FDK+IR 混合 + 多 GPU，我们的 Hybrid 配方即此思路 |
+
+**一句话结论**：滤波对齐后，**ASTRA 在质量、速度、helical 几何三项全面胜出，是生产化首选**；TIGRE 的价值在算法多样性和开发效率（研究/原型），生产选型时应把其部分算法的稳定性风险纳入评估。
+## optimize #009
+tv gpu  
 ## optimize #008
 os3+tv1+fdk speed up ,but rmse down
 ## optimize #007 tv beta

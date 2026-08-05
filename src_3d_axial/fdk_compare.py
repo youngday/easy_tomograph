@@ -26,7 +26,7 @@ try:
 except ImportError:
     print("ASTRA 不可用"); exit(1)
 
-N = 512; nz = 32; n_angles = 360
+N = 512; nz = 32; n_angles = 180
 print(f"体模: {nz}x{N}x{N}, 角度: {n_angles}")
 
 tp_lib = os.path.join(os.path.dirname(tomophantom.__file__),
@@ -87,12 +87,13 @@ aid = astra.algorithm.create(cfg); astra.algorithm.run(aid)
 sino = astra.data3d.get(sid)
 astra.algorithm.delete(aid); astra.data3d.delete(sid); astra.data3d.delete(vid)
 
-# ASTRA FDK
+# ASTRA FDK (hann, 与TIGRE对齐: ram-lak噪声放大2倍)
 t0 = time()
 sid_f = astra.data3d.create("-sino", proj_geom, sino)
 rid_f = astra.data3d.create("-vol", vol_geom)
 cfg = astra.astra_dict("FDK_CUDA")
 cfg["ProjectionDataId"] = sid_f; cfg["ReconstructionDataId"] = rid_f
+cfg["option"] = {"FilterType": "hann"}
 aid = astra.algorithm.create(cfg); astra.algorithm.run(aid)
 rec_astra = astra.data3d.get(rid_f).copy()
 astra.algorithm.delete(aid); astra.data3d.delete(rid_f); astra.data3d.delete(sid_f)
@@ -104,9 +105,9 @@ print(f"   ASTRA FDK:    {t_astra*1000:6.0f}ms  RMSE={calc_rmse(r):.5f}  SSIM={c
 print("\n===== 2. TIGRE FDK (各种滤波器) =====")
 geo = tigre.geometry()
 geo.DSD = DSO + DSD; geo.DSO = DSO
-geo.nVoxel = np.array([nz, N, N]); geo.sVoxel = np.array([nz*1.5, N, N])
-geo.dVoxel = geo.sVoxel / geo.nVoxel
-geo.nDetector = np.array([nz*2, D]); geo.dDetector = np.array([1.0, N/D])
+geo.nVoxel = np.array([nz, N, N]); geo.sVoxel = np.array([nz, N, N])  # 各向同性 1.0mm (与ASTRA对齐)
+geo.dVoxel = np.array([1.0, 1.0, 1.0])
+geo.nDetector = np.array([nz*2, D]); geo.dDetector = np.array([1.0, 1.0])  # 与ASTRA对齐
 geo.sDetector = geo.nDetector * geo.dDetector
 geo.offOrigin = np.array([0, 0, 0]); geo.offDetector = np.array([0, 0])
 geo.mode = "cone"; geo.filter = None
@@ -114,7 +115,7 @@ geo.mode = "cone"; geo.filter = None
 sino_tigre = tigre.Ax(vol_gt, geo, angles)
 print(f"   TIGRE 投影: {sino_tigre.shape}")
 
-filters = ["shepp_logan", "ram_lak", "hamming", "hann", "cosine", "ram_lak"]
+filters = ["shepp_logan", "ram_lak", "hamming", "hann", "cosine"]
 for filt in filters:
     t0 = time()
     rec = algs.fdk(sino_tigre, geo, angles, filter=filt)
@@ -134,14 +135,13 @@ for sigma in [0.3, 0.5, 1.0]:
 
 # ===== 探测器类型对比 =====
 print("\n===== 3. TIGRE 探测器类型 =====")
-for mode in ["cone", "flat"]:
-    geo.mode = mode
-    t0 = time()
-    rec = algs.fdk(sino_tigre, geo, angles, filter="shepp_logan")
-    t = time() - t0
-    r = linear_scale(rec)
-    print(f"   TIGRE mode={mode:6s}:     {t*1000:6.0f}ms  RMSE={calc_rmse(r):.5f}  SSIM={calc_ssim(r):.4f}")
+# TIGRE 3.1.2 仅支持 cone/parallel; flat 无效(fallback cone并警告), 故只测 cone
 geo.mode = "cone"
+t0 = time()
+rec = algs.fdk(sino_tigre, geo, angles, filter="shepp_logan")
+t = time() - t0
+r = linear_scale(rec)
+print(f"   TIGRE mode=cone:     {t*1000:6.0f}ms  RMSE={calc_rmse(r):.5f}  SSIM={calc_ssim(r):.4f}")
 
 # ===== 可视化对比 =====
 print("\n生成可视化...")
@@ -151,11 +151,12 @@ mid = nz // 2
 results = {}
 results["GT"] = vol_gt[mid]
 
-# ASTRA
+# ASTRA (hann)
 sino_id = astra.data3d.create("-sino", proj_geom, sino)
 rid_f = astra.data3d.create("-vol", vol_geom)
 cfg = astra.astra_dict("FDK_CUDA")
 cfg["ProjectionDataId"] = sino_id; cfg["ReconstructionDataId"] = rid_f
+cfg["option"] = {"FilterType": "hann"}
 aid = astra.algorithm.create(cfg); astra.algorithm.run(aid)
 rec_astra = astra.data3d.get(rid_f).copy()
 astra.algorithm.delete(aid); astra.data3d.delete(rid_f); astra.data3d.delete(sino_id)

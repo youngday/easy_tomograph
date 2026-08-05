@@ -108,9 +108,10 @@ def tv_gradient_gpu(v, w_z=1.5, eps=1e-8):
 
 
 def tv_denoise_gpu(v, beta, w_z=1.5, **kwargs):
-    """GPU TV 去噪: v - β * ∇TV(v)"""
-    grad = tv_gradient_gpu(v, w_z=w_z)
-    return cp.asnumpy(cp.asarray(v, dtype=cp.float32) - beta * grad)
+    """GPU TV 去噪: v - β * ∇TV(v)  (修复: grad 为 numpy, 需转 cupy 再相减)"""
+    vg = cp.ascontiguousarray(cp.asarray(v, dtype=cp.float32))
+    grad = tv_gradient_gpu(v, w_z=w_z)  # 返回 numpy
+    return cp.asnumpy(vg - beta * cp.asarray(grad, dtype=cp.float32))
 
 
 # ---- 自检: 与 CPU 版本对比 ----

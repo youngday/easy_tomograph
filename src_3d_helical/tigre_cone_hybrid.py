@@ -52,7 +52,7 @@ print("=" * 60)
 
 N = 512
 nz = 32
-n_angles = 360
+n_angles = 180
 
 import tomophantom
 from tomophantom import TomoP3D
@@ -90,7 +90,7 @@ geo.offDetector = np.array([0, 0])
 pitch = 16.0
 geo.mode = "cone"
 geo.filter = None
-blocksize = 36  # 10 subsets (用户指定; 实验显示60同质量快14%, 可选)
+blocksize = 36  # 5 subsets (180角度/36; 用户指定; 实验显示60同质量快14%, 可选)
 
 # ================= 统一 offOrigin-z 螺旋几何 (TIGRE 官方推荐) =================
 # TIGRE 无原生 helical 模式; 官方 demo d13 用 offOrigin.z 偏移模拟螺旋轨迹
@@ -157,7 +157,7 @@ print(f"   z-profile: mean={fdk_zprof.mean():.5f}, max={fdk_zprof.max():.5f}, mi
 
 # ========== B. 噪声/伪影 + Hybrid IR ==========
 print("-" * 55)
-print("B. Hybrid IR (OS-SART×3 + TV×1 + FDK混合 50%)")
+print("B. Hybrid IR (OS-SART×3 + TV×3(β递减) + FDK混合 50%)")
 print("-" * 55)
 
 from ct_noise import add_artifacts
@@ -167,11 +167,14 @@ sino_noisy = add_artifacts(sino, dose_level=0.5, hardening=False, rings=True, sc
 # 噪声 FDK 初始化 (几何一致)
 rec_fdk_noisy = algs.fdk(sino_noisy, geo_off, angles, filter="hann")
 
+# Hybrid IR 改进: TV1(批量) → TV3(interleave β递减)  [与TV-OS-SART方法论一致]
+beta0, decay = 0.002, 0.8  # β: 0.002→0.0013
 t0 = time()
 rec_hybrid = rec_fdk_noisy.copy()
-rec_hybrid = algs.ossart(sino_noisy, geo_off, angles, niter=3, init=rec_hybrid,
-                         blocksize=blocksize, verbose=False)
-rec_hybrid = rec_hybrid - 0.003 * tv_gradient(rec_hybrid, w_z=1.5)
+for ni in range(3):
+    rec_hybrid = algs.ossart(sino_noisy, geo_off, angles, niter=1, init=rec_hybrid,
+                             blocksize=blocksize, verbose=False)
+    rec_hybrid = rec_hybrid - beta0 * decay ** ni * tv_gradient(rec_hybrid, w_z=1.5)
 rec_hybrid = 0.5 * rec_hybrid + 0.5 * rec_fdk_noisy
 t_hybrid = time() - t0
 r_hybrid, s_hybrid = calc_rmse(linear_scale(rec_hybrid)), calc_ssim(linear_scale(rec_hybrid))
@@ -180,28 +183,30 @@ print(f"   Hybrid IR: RMSE={r_hybrid:.5f}, SSIM={s_hybrid:.4f}, {t_hybrid*1000:.
 hybrid_zprof = calc_z_profile(best_hybrid["rec"])
 print(f"   z-profile: mean={hybrid_zprof.mean():.5f}")
 
-# ========== C. TV-OS-SART (interleave TV, 单次调度) ==========
-# 优化(exp_optim.py): 单次5 iter+interleave TV(每迭代β=0.001) 质量0.00144→0.00131
+# ========== C. TV-OS-SART (interleave TV, β递减调度) ==========
+# β递减 (ASD-POCS风格): 前期强TV压制噪声→后期弱TV细修, 把过拟合点右移, 让迭代增多时RMSE仍下降
+# (β递增已被证明是灾难: TV累计过度平滑, x10 RMSE 0.0074)
 print("-" * 55)
-print(f"C. TV-OS-SART (interleave TV, bs={blocksize})")
+print(f"C. TV-OS-SART (interleave TV, β递减, bs={blocksize})")
 print("-" * 55)
 rec_tv = rec_fdk_noisy.copy()
 fdk_noisy_rmse = calc_rmse(linear_scale(rec_fdk_noisy))
 best_tv = {"rmse": 1e9, "ssim": -1, "rec": None, "t": 0, "n": 0}
-t0_total = time()
-for ni in range(1, 6):  # 迭代至 x5 (展示曲线; 噪声下早停最优)
+t_tv_total = 0.0  # 纯算法时间累计 (度量/打印不计入, 与Hybrid口径一致)
+beta0, decay = 0.002, 0.8  # β递减: 0.002→0.0008@x5 (迭代上限x5, 用户指定速度优先)
+for ni in range(1, 6):  # 迭代至 x5
+    beta = beta0 * decay ** (ni - 1)
+    t0 = time()
     rec_tv = algs.ossart(sino_noisy, geo_off, angles, niter=1, init=rec_tv,
                          blocksize=blocksize, verbose=False)
     # TV 去噪 (GPU/CuPy → CPU 回退), 每迭代一次 (interleave)
-    rec_tv = rec_tv - 0.001 * tv_gradient(rec_tv, w_z=1.5)
-    t = time() - t0_total
+    rec_tv = rec_tv - beta * tv_gradient(rec_tv, w_z=1.5)
+    t_tv_total += time() - t0
+    t = t_tv_total
     r, s = calc_rmse(linear_scale(rec_tv)), calc_ssim(linear_scale(rec_tv))
     if r < best_tv["rmse"]:
         best_tv = {"rmse": r, "ssim": s, "rec": linear_scale(rec_tv), "t": t, "n": ni}
-    print(f"   TV-OS-SART x{ni:3d} (β=0.0010): RMSE={r:.5f}, SSIM={s:.4f}, 累计{t*1000:.0f}ms")
-# FDK 稳定化 (末次一次性, 实验A/B: 无损)
-rec_tv = 0.95 * rec_tv + 0.05 * rec_fdk_noisy
-print(f"   TV-OS-SART x5 (+FDK稳定化): RMSE={calc_rmse(linear_scale(rec_tv)):.5f}, SSIM={calc_ssim(linear_scale(rec_tv)):.4f}")
+    print(f"   TV-OS-SART x{ni:3d} (β={beta:.4f}): RMSE={r:.5f}, SSIM={s:.4f}, 累计{t*1000:.0f}ms")
 print(f"   >> 最优: TV-OS-SART x{best_tv['n']}: RMSE={best_tv['rmse']:.5f}, SSIM={best_tv['ssim']:.4f}")
 tv_improv = (1 - best_tv['rmse'] / fdk_noisy_rmse) * 100
 print(f"   TV 改善(vs 噪声FDK {fdk_noisy_rmse:.5f}): {tv_improv:+.1f}%")
@@ -210,7 +215,7 @@ print(f"   z-profile: mean={best_tv_zprof.mean():.5f}")
 
 # ========== D. 汇总 ==========
 print("\n" + "=" * 70)
-print(f"汇总对比 (32x512x512, 360角度, blocksize={blocksize})")
+print(f"汇总对比 (32x512x512, {n_angles}角度, blocksize={blocksize})")
 print("=" * 70)
 print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'z-RMSE':>10s}")
 print("-" * 72)
@@ -237,7 +242,7 @@ ts = strftime("%Y-%m-%d %H:%M:%S", localtime())
 titles_upper = [
     ("Ground Truth", vol_gt[mid], None, None, None, None),
     ("FDK", fdk_rec[mid], fdk_rmse, fdk_ssim, fdk_t, None),
-    ("Hybrid IR\nOS3+TV1+FDK50%", best_hybrid["rec"][mid], best_hybrid["rmse"], best_hybrid["ssim"], best_hybrid["t"], None),
+    ("Hybrid IR\nOS3+TV3(β↓)+FDK50%", best_hybrid["rec"][mid], best_hybrid["rmse"], best_hybrid["ssim"], best_hybrid["t"], None),
     ("TV-OS-SART", best_tv["rec"][mid], best_tv["rmse"], best_tv["ssim"], best_tv["t"], best_tv["n"]),
 ]
 for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
