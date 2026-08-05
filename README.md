@@ -49,7 +49,10 @@ tigre_hybrid
 
 ## result
 [optimize #010](doc/optimize.md)
-select astra.
+select astra(gpu) for production
+select tigre(gpu) for research
+select rtk for cpu
+
 
 ## TODO
 
