@@ -19,6 +19,7 @@ src_astra_cpp/
 │   └── main_helical.cpp      # 螺旋入口  → astra_helical
 ├── tools/
 │   ├── make_phantom.py       # 用 tomophantom 生成体模 .raw (体模无 C++ API)
+│   ├── make_sino_noisy.py    # 用原版 ct_noise.py 生成共享噪声 sinogram (与 Python 逐位一致)
 │   └── render_results.py     # 将结果渲染为对比图 (matplotlib)
 ├── third_party/
 │   └── astra/include/astra/  # ASTRA Toolbox v2.5.0 C++ 头文件 (GPLv3, 官方源码)
@@ -53,11 +54,14 @@ cmake --build build -j
 # 1. 生成体模 (一次即可, 轴向/螺旋共用)
 .venv/bin/python src_astra_cpp/tools/make_phantom.py
 
-# 2. 重建
+# 2. 生成与 Python 版完全一致的含噪声 sinogram (numpy 噪声, 轴向/螺旋各一份)
+.venv/bin/python src_astra_cpp/tools/make_sino_noisy.py both
+
+# 3. 重建 (会自动加载共享噪声文件; 找不到时回退到内置 mt19937 噪声)
 src_astra_cpp/build/astra_axial    src_astra_cpp/data/vol_gt.raw img_3d_axial/astra_cpp
 src_astra_cpp/build/astra_helical  src_astra_cpp/data/vol_gt.raw img_3d_helical/astra_cpp
 
-# 3. 渲染对比图 (C++ 跑完会自动调用, 无需手动; 也可手动执行)
+# 4. 渲染对比图 (C++ 跑完会自动调用, 无需手动; 也可手动执行)
 .venv/bin/python src_astra_cpp/tools/render_results.py axial helical
 ```
 
@@ -69,8 +73,11 @@ src_astra_cpp/build/astra_helical  src_astra_cpp/data/vol_gt.raw img_3d_helical/
 ## 与 Python 版的差异
 
 - **体模**: 由 `tools/make_phantom.py` 生成 (tomophantom 无 C++ API), 与 Python 版逐元素一致
-- **噪声**: 模型相同 (泊松-高斯 + 环形伪影), 但 RNG 为 `std::mt19937`, 与 numpy
-  不逐位一致 → 噪声数据的指标与 Python 版有细微差异 (同数量级)
+- **噪声**: 默认加载 `data/sino_noisy_{axial,helical}.raw` (由 `tools/make_sino_noisy.py`
+  用**原版** `src_3d_axial/ct_noise.py` + numpy 生成) → 与 Python 版**逐位一致**,
+  FDK(noisy)/TV-OS-SART/Hybrid 指标与 Python 完全一致 (0.00081/0.9954 等)。
+  若噪声文件不存在, 回退到内置噪声 (模型相同, 但 `std::mt19937` 与 numpy
+  不逐位一致, 指标有细微差异)
 - **干净数据 (无噪声) 的 FDK 结果与 Python 版完全一致** (同一 GPU 内核, 确定性)
 
 ## 已验证结果 (对比 Python 基线 `img_3d_axial|helical/astra_cone_hybrid_summary.json`)

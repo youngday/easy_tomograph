@@ -217,10 +217,14 @@ rid_n = astra.data3d.create("-vol", vol_geom)
 c = astra.astra_dict("FDK_CUDA")
 c["ProjectionDataId"] = sid_n; c["ReconstructionDataId"] = rid_n
 c["option"] = {"FilterType": "hann"}  # 与TIGRE filter=hann对齐
-a = astra.algorithm.create(c); astra.algorithm.run(a)
+a = astra.algorithm.create(c); t0 = time(); astra.algorithm.run(a)
 rec_fdk_n = astra.data3d.get(rid_n).copy()
+fdk_noisy_t = time() - t0
 astra.algorithm.delete(a); astra.data3d.delete(rid_n); astra.data3d.delete(sid_n)
-fdk_noisy_rmse = calc_rmse(linear_scale(rec_fdk_n))
+rec_fdk_n_ls = linear_scale(rec_fdk_n)
+fdk_noisy_rmse = calc_rmse(rec_fdk_n_ls)
+fdk_noisy_ssim = calc_ssim(rec_fdk_n_ls)
+fdk_noisy_zprof = calc_z_profile(rec_fdk_n_ls)
 
 # ===== OS-SART 快速函数 (复用ASTRA对象) =====
 def fast_ossart(rec, n_step=1):
@@ -301,11 +305,13 @@ print("=" * 70)
 print(f"{'算法':30s} {'耗时(ms)':>10s} {'RMSE':>12s} {'SSIM':>8s} {'z-RMSE':>10s}")
 print("-" * 72)
 print(f"{'Pure FDK':30s} {fdk_t*1000:>8.0f} ms  {fdk_rmse:>10.5f}  {fdk_ssim:>8.4f} {fdk_zprof.mean():>10.5f}")
+print(f"{'FDK(noisy)':30s} {fdk_noisy_t*1000:>8.0f} ms  {fdk_noisy_rmse:>10.5f}  {fdk_noisy_ssim:>8.4f} {fdk_noisy_zprof.mean():>10.5f}")
 print(f"{'Hybrid IR':30s} {t_hybrid*1000:>8.0f} ms  {r_hybrid:>10.5f}  {s_hybrid:>8.4f} {hybrid_zprof.mean():>10.5f}")
 print(f"{'TV-OS-SART x'+str(best_tv['n']):30s} {best_tv['t']*1000:>8.0f} ms  {best_tv['rmse']:>10.5f}  {best_tv['ssim']:>8.4f} {best_tv_zprof.mean():>10.5f}")
 
 results = [
     ("Pure FDK", fdk_t, fdk_rmse, fdk_ssim),
+    ("FDK(noisy)", fdk_noisy_t, fdk_noisy_rmse, fdk_noisy_ssim),
     ("Hybrid IR", t_hybrid, r_hybrid, s_hybrid),
     ("TV-OS-SART x"+str(best_tv["n"]), best_tv["t"], best_tv["rmse"], best_tv["ssim"]),
 ]
@@ -314,13 +320,14 @@ results = [
 print("\n生成可视化...")
 os.makedirs("img_3d_helical", exist_ok=True)
 mid = nz // 2
-fig = plt.figure(figsize=(28, 12))
-gs = GridSpec(3, 4, figure=fig, hspace=0.4, wspace=0.3)
+fig = plt.figure(figsize=(35, 12))
+gs = GridSpec(3, 5, figure=fig, hspace=0.4, wspace=0.3)
 ts = strftime("%Y-%m-%d %H:%M:%S", localtime())
 
 titles_upper = [
     ("Ground Truth", vol_gt[mid], None, None, None, None),
     ("FDK", fdk_rec[mid], fdk_rmse, fdk_ssim, fdk_t, None),
+    ("FDK(noisy)", rec_fdk_n_ls[mid], fdk_noisy_rmse, fdk_noisy_ssim, fdk_noisy_t, None),
     ("Hybrid IR\nOS10+TV10(β↓)+FDK10%", best_hybrid["rec"][mid], best_hybrid["rmse"], best_hybrid["ssim"], best_hybrid["t"], None),
     ("TV-OS-SART", best_tv["rec"][mid], best_tv["rmse"], best_tv["ssim"], best_tv["t"], best_tv["n"]),
 ]
@@ -347,9 +354,9 @@ for i, (title, img, rmse, ssim, t, ni) in enumerate(titles_upper):
 
 # z-profile 图 (第3行)
 z_coord = np.arange(nz)
-zprofiles = [fdk_zprof, hybrid_zprof, best_tv_zprof]
-zlabels = ["FDK", "Hybrid IR", "TV-OS-SART"]
-zcolors = ["orange", "purple", "red"]
+zprofiles = [fdk_zprof, fdk_noisy_zprof, hybrid_zprof, best_tv_zprof]
+zlabels = ["FDK", "FDK(noisy)", "Hybrid IR", "TV-OS-SART"]
+zcolors = ["orange", "brown", "purple", "red"]
 ax_z = fig.add_subplot(gs[2, :])
 for zp, zl, zc in zip(zprofiles, zlabels, zcolors):
     ax_z.plot(z_coord, zp, 'o-', label=zl, color=zc, markersize=3)
@@ -373,6 +380,7 @@ summary = {
                 for name,t,r,s in results},
     "z_profile": {
         "FDK": [round(x,5) for x in fdk_zprof.tolist()],
+        "FDK(noisy)": [round(x,5) for x in fdk_noisy_zprof.tolist()],
         "TV-OS-SART x"+str(best_tv["n"]): [round(x,5) for x in best_tv_zprof.tolist()],
     }
 }

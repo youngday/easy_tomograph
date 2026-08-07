@@ -48,6 +48,7 @@ def render(mode, outdir=None):
             gt = load_vol(p)
             break
     fdk = load_vol(os.path.join(d, "cpp_fdk.raw"))
+    fdk_n = load_vol(os.path.join(d, "cpp_fdk_noisy.raw"))
     tv = load_vol(os.path.join(d, "cpp_tv.raw"))
     hyb = load_vol(os.path.join(d, "cpp_hybrid.raw"))
 
@@ -63,12 +64,13 @@ def render(mode, outdir=None):
     tv_key = max((k for k in res if k.startswith("TV-OS-SART")), key=lambda s: int(s.split("x")[1]))
     tv_n = int(tv_key.split("x")[1])
 
-    # ---- 与 Python 版 titles_upper 相同的面板 ----
-    fig = plt.figure(figsize=(24, 12) if mode == "axial" else (28, 12))
-    gs = GridSpec(3, 4, figure=fig, hspace=0.45, wspace=0.3)
+    # ---- 与 Python 版 titles_upper 相同的面板 (5 列) ----
+    fig = plt.figure(figsize=(30, 12) if mode == "axial" else (35, 12))
+    gs = GridSpec(3, 5, figure=fig, hspace=0.45, wspace=0.3)
     panels = [
         ("Ground Truth", gt[mid] if gt is not None else np.zeros((N, N), dtype=np.float32), None, None),
         ("FDK", fdk[mid], res["Pure FDK"], None),
+        ("FDK(noisy)", fdk_n[mid], res["FDK(noisy)"], None),
         ("Hybrid IR\nOS10+TV10(β↓)+FDK10%", hyb[mid], res["Hybrid IR"], None),
         ("TV-OS-SART", tv[mid], res[tv_key], tv_n),
     ]
@@ -98,7 +100,8 @@ def render(mode, outdir=None):
     zp = summary.get("z_profile", {})
     z_coord = np.arange(nz)
     ax_z = fig.add_subplot(gs[2, :])
-    for name, color in zip(["FDK", "Hybrid IR", "TV-OS-SART"], ["orange", "purple", "red"]):
+    for name, color in zip(["FDK", "FDK(noisy)", "Hybrid IR", "TV-OS-SART"],
+                           ["orange", "brown", "purple", "red"]):
         key = name if name in zp else (tv_key if name == "TV-OS-SART" else None)
         if key and key in zp:
             ax_z.plot(z_coord, zp[key], "o-", label=name, color=color, markersize=3)

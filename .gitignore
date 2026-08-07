@@ -3,3 +3,5 @@
 src_astra_cpp/build/
 src_astra_cpp/data/
 *.raw
+src_3d_axial/
+src_3d_helical/

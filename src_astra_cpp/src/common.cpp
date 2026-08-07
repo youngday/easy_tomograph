@@ -445,11 +445,27 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     printf("   RMSE=%.5f, SSIM=%.4f, %.0fms\n", fdk_rmse, fdk_ssim, fdk_t);
     printf("   z-profile: mean=%.5f, max=%.5f\n", fdk_zprof.mean, fdk_zprof.max);
 
-    // ---- 噪声数据 ----
-    std::vector<float> sino_noisy = add_artifacts(sino);
-    printf("%s\n有噪声数据 (dose=0.5, rings=15)...\n", kSep55);
+    // ---- 噪声数据 (优先加载与 Python 版共享的噪声文件, 保证逐位一致) ----
+    std::vector<float> sino_noisy;
+    {
+        // 与体模同目录下的 sino_noisy_{axial,helical}.raw (由 tools/make_sino_noisy.py 生成)
+        std::string phantom_dir = ".";
+        size_t pos = phantom_path.find_last_of('/');
+        if (pos != std::string::npos) phantom_dir = phantom_path.substr(0, pos);
+        std::string noise_path = phantom_dir + "/sino_noisy_" + (helical ? "helical" : "axial") + ".raw";
+        std::vector<float> shared = load_raw(noise_path, nsino);
+        if (!shared.empty()) {
+            sino_noisy = std::move(shared);
+            printf("%s\n使用共享噪声文件 %s (与 Python 版逐位一致)\n", kSep55, noise_path.c_str());
+        } else {
+            sino_noisy = add_artifacts(sino);
+            printf("%s\n未找到 %s, 使用内置噪声 (std::mt19937, 与 Python 版略有差异)\n",
+                   kSep55, noise_path.c_str());
+        }
+    }
 
-    // 有噪声 FDK (一次性, 作为 B/C 的起点)
+    // 有噪声 FDK (一次性, 作为 B/C 的起点; 噪声与 Python 版逐位一致)
+    Stopwatch sw_fdk_n;
     std::unique_ptr<astra::CFloat32ProjectionData3D> sino_n(
         astra::createCFloat32ProjectionData3DMemory(projGeom));
     std::memcpy(sino_n->getFloat32Memory(), sino_noisy.data(), nsino * sizeof(float));
@@ -460,8 +476,12 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     std::vector<float> rec_fdk_n(nvol);
     std::memcpy(rec_fdk_n.data(), vol_n->getFloat32Memory(), nvol * sizeof(float));
     std::vector<float> rec_fdk_n_ls = linear_scale(rec_fdk_n, vol_gt);
+    double fdk_noisy_t = sw_fdk_n.ms();
     double fdk_noisy_rmse = calc_rmse(rec_fdk_n_ls, vol_gt);
-    printf("   FDK(noisy) RMSE=%.5f\n", fdk_noisy_rmse);
+    double fdk_noisy_ssim = calc_ssim(rec_fdk_n_ls, vol_gt);
+    ZProfile fdk_noisy_zprof = calc_z_profile(rec_fdk_n_ls, vol_gt);
+    printf("   FDK(noisy) RMSE=%.5f, SSIM=%.4f, %.0fms\n",
+           fdk_noisy_rmse, fdk_noisy_ssim, fdk_noisy_t);
 
     // ---- 预分配 10 个子集 SIRT3D_CUDA 对象 (与 Python 复用对象一致) ----
     std::vector<SubsetObjects> subs;
@@ -570,6 +590,7 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
         printf("警告: 无法创建输出目录 %s\n", outdir.c_str());
 
     save_raw(outdir + "/cpp_fdk.raw", fdk_rec);
+    save_raw(outdir + "/cpp_fdk_noisy.raw", rec_fdk_n_ls);
     save_raw(outdir + "/cpp_tv.raw", best_rec);
     save_raw(outdir + "/cpp_hybrid.raw", rec_h_ls);
 
@@ -582,6 +603,7 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     printf("%-30s %10s %12s %8s %10s\n", "算法", "耗时(ms)", "RMSE", "SSIM", "z-RMSE");
     printf("%s\n", kSep72);
     printf("%-30s %8.0f ms  %10.5f  %8.4f %10.5f\n", "Pure FDK", fdk_t, fdk_rmse, fdk_ssim, fdk_zprof.mean);
+    printf("%-30s %8.0f ms  %10.5f  %8.4f %10.5f\n", "FDK(noisy)", fdk_noisy_t, fdk_noisy_rmse, fdk_noisy_ssim, fdk_noisy_zprof.mean);
     std::string tv_name = "TV-OS-SART x" + std::to_string(best_ni);
     printf("%-30s %8.0f ms  %10.5f  %8.4f %10.5f\n", tv_name.c_str(), best_t, best_rmse, best_ssim, best_tv_zprof.mean);
     printf("%-30s %8.0f ms  %10.5f  %8.4f %10.5f\n", "Hybrid IR", t_hybrid, r_hybrid, s_hybrid, hybrid_zprof.mean);
@@ -597,7 +619,8 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
        << ", \"n_subsets\": " << n_subsets << ", \"DSO\": 1000, \"iso_det\": 500";
     if (helical) js << ", \"pitch\": 16.0";
     js << "},\n  \"results\": {\n"
-       << "    \"Pure FDK\": " << json_result({fdk_rmse, fdk_ssim, fdk_t}) << ",\n";
+       << "    \"Pure FDK\": " << json_result({fdk_rmse, fdk_ssim, fdk_t}) << ",\n"
+       << "    \"FDK(noisy)\": " << json_result({fdk_noisy_rmse, fdk_noisy_ssim, fdk_noisy_t}) << ",\n";
     if (helical)
         js << "    \"Hybrid IR\": " << json_result({r_hybrid, s_hybrid, t_hybrid}) << ",\n"
            << "    \"TV-OS-SART x" << best_ni << "\": " << json_result({best_rmse, best_ssim, best_t}) << "\n";
@@ -606,6 +629,7 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
            << "    \"Hybrid IR\": " << json_result({r_hybrid, s_hybrid, t_hybrid}) << "\n";
     js << "  },\n  \"z_profile\": {\n"
        << "    \"FDK\": " << json_arr(fdk_zprof.per_slice, 5)
+       << ",\n    \"FDK(noisy)\": " << json_arr(fdk_noisy_zprof.per_slice, 5)
        << ",\n    \"Hybrid IR\": " << json_arr(hybrid_zprof.per_slice, 5)
        << ",\n    \"TV-OS-SART x" << best_ni << "\": " << json_arr(best_tv_zprof.per_slice, 5)
        << "\n  }\n}\n";
