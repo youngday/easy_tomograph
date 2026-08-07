@@ -659,10 +659,9 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
         js << "    \"TV-OS-SART x" << best_ni << "\": " << json_result({best_rmse, best_ssim, best_t}) << ",\n"
            << "    \"Hybrid IR\": " << json_result({r_hybrid, s_hybrid, t_hybrid}) << "\n";
     js << "  },\n  \"z_profile\": {\n"
-       << "    \"FDK\": " << json_arr(fdk_zprof.per_slice, 5);
-    if (!helical)
-        js << ",\n    \"Hybrid IR\": " << json_arr(hybrid_zprof.per_slice, 5);
-    js << ",\n    \"TV-OS-SART x" << best_ni << "\": " << json_arr(best_tv_zprof.per_slice, 5)
+       << "    \"FDK\": " << json_arr(fdk_zprof.per_slice, 5)
+       << ",\n    \"Hybrid IR\": " << json_arr(hybrid_zprof.per_slice, 5)
+       << ",\n    \"TV-OS-SART x" << best_ni << "\": " << json_arr(best_tv_zprof.per_slice, 5)
        << "\n  }\n}\n";
     std::ofstream js_out(outdir + "/cpp_summary.json");
     js_out << js.str();
@@ -675,6 +674,25 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
              << "," << best_tv_zprof.per_slice[z] << "\n";
 
     printf("   => %s/cpp_*.png, cpp_*.raw, cpp_zprofile.csv\n", outdir.c_str());
+
+    // ---- 渲染与 Python 版同款结果图 (自动调用 tools/render_results.py) ----
+    {
+        const char* env_py = std::getenv("PYTHON");
+        std::string py;
+        if (env_py && *env_py) {
+            py = env_py;
+        } else if (std::fopen(".venv/bin/python", "r")) {
+            py = ".venv/bin/python";
+        } else {
+            py = "python3";
+        }
+        std::string rcmd = py + " src_astra_cpp/tools/render_results.py "
+                         + (helical ? "helical" : "axial") + " \"" + outdir + "\"";
+        printf("渲染结果图: %s\n", rcmd.c_str());
+        if (std::system(rcmd.c_str()) != 0)
+            printf("   (渲染失败或缺少 python/matplotlib, 可手动运行: %s)\n", rcmd.c_str());
+    }
+
     printf("\nDone!\n");
     return 0;
 }

@@ -58,13 +58,14 @@ cmake --build build -j
 src_astra_cpp/build/astra_axial    src_astra_cpp/data/vol_gt.raw img_3d_axial/astra_cpp
 src_astra_cpp/build/astra_helical  src_astra_cpp/data/vol_gt.raw img_3d_helical/astra_cpp
 
-# 3. 渲染对比图 (可选)
+# 3. 渲染对比图 (C++ 跑完会自动调用, 无需手动; 也可手动执行)
 .venv/bin/python src_astra_cpp/tools/render_results.py axial helical
 ```
 
-输出: `img_{axial,helical}/astra_cpp/` 下的 `cpp_*.png` (中片 + 误差图)、
-`cpp_*.raw` (FDK/TV/Hybrid 结果体)、`cpp_summary.json` (指标 + z-profile)、
-`cpp_zprofile.csv`。
+输出: `img_{axial,helical}/astra_cpp/` 下的 `astra_cone_hybrid.png`
+(**与 Python 版同款 3×4 结果图**, 尺寸/布局/标题/suptitle 完全一致)、
+`cpp_*.png` (中片 + 误差图)、`cpp_*.raw` (FDK/TV/Hybrid 结果体)、
+`cpp_summary.json` (指标 + z-profile)、`cpp_zprofile.csv`。
 
 ## 与 Python 版的差异
 
