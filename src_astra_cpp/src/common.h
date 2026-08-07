@@ -22,6 +22,9 @@ struct ZProfile {
 // 运行完整的 ASTRA 锥束混合重建流水线 (FDK / TV-OS-SART / Hybrid IR)
 //   helical: true  = 螺旋轨迹 (pitch=16mm/圈), false = 轴向圆轨迹
 //   phantom_path: 输入体模 (float32, nz*N*N, [z][y][x] 布局)
-//   outdir:        输出目录 (JSON 摘要 / PNG 切片 / .raw 结果体)
+//   outdir:        输出目录 (JSON 摘要 / 结果图 / .raw 结果体)
+//   max_epochs:    迭代轮数上限 (默认 10)
+//   target_rmse:   RMSE 达标即提前停止 (默认 0.001; 设为 0 则跑满 max_epochs)
 // 返回 0 表示成功
-int run_pipeline(bool helical, const std::string& phantom_path, const std::string& outdir);
+int run_pipeline(bool helical, const std::string& phantom_path, const std::string& outdir,
+                 int max_epochs = 10, double target_rmse = 0.001);

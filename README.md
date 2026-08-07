@@ -25,7 +25,7 @@ fbp vs ir
 sirt os-sart
 ### astra_hybrid.py
 <!--![astra_hybrid](img_out/astra_hybrid.png)-->
-### tigre_hybrid.py
+<!--### tigre_hybrid.py-->
 <!--![tigre_hybrid](img_out/tigre_hybrid.png)-->
 
 
@@ -35,17 +35,17 @@ tv-os-sart+fdk
 ![fdk_compare](img_3d_axial/fdk_compare.png)
 ### astra_cone_hybrid.py
 ![astra_cone_hybrid](img_3d_axial/astra_cone_hybrid.png)
-### tigre_cone_hybrid.py
+<!--### tigre_cone_hybrid.py
 tigre_hybrid
-![tigre_cone_hybrid](img_3d_axial/tigre_cone_hybrid.png)
+![tigre_cone_hybrid](img_3d_axial/tigre_cone_hybrid.png)-->
 
 ## helical cone hybrid
 tv-os-sart+fdk
 ### astra_cone_hybrid.py
 ![astra_cone_hybrid](img_3d_helical/astra_cone_hybrid.png)
-### tigre_cone_hybrid.py
+<!--### tigre_cone_hybrid.py
 tigre_hybrid
-![tigre_cone_hybrid](img_3d_helical/tigre_cone_hybrid.png)
+![tigre_cone_hybrid](img_3d_helical/tigre_cone_hybrid.png)-->
 
 ## result
 [optimize #010](doc/optimize.md)

@@ -63,6 +63,10 @@ def render(mode, outdir=None):
 
     tv_key = max((k for k in res if k.startswith("TV-OS-SART")), key=lambda s: int(s.split("x")[1]))
     tv_n = int(tv_key.split("x")[1])
+    cfg = summary.get("config", {})
+    ep = cfg.get("epochs", {})
+    n_tv = ep.get("tv_ossart", tv_n)
+    n_hyb = ep.get("hybrid", 10)
 
     # ---- 与 Python 版 titles_upper 相同的面板 (5 列) ----
     fig = plt.figure(figsize=(30, 12) if mode == "axial" else (35, 12))
@@ -71,7 +75,7 @@ def render(mode, outdir=None):
         ("Ground Truth", gt[mid] if gt is not None else np.zeros((N, N), dtype=np.float32), None, None),
         ("FDK", fdk[mid], res["Pure FDK"], None),
         ("FDK(noisy)", fdk_n[mid], res["FDK(noisy)"], None),
-        ("Hybrid IR\nOS10+TV10(β↓)+FDK10%", hyb[mid], res["Hybrid IR"], None),
+        (f"Hybrid IR\nOS{n_hyb}+TV{n_hyb}(β↓)+FDK10%", hyb[mid], res["Hybrid IR"], None),
         ("TV-OS-SART", tv[mid], res[tv_key], tv_n),
     ]
     for i, (title, img, r, ni) in enumerate(panels):
@@ -111,13 +115,14 @@ def render(mode, outdir=None):
     ax_z.set_title("z-profile: 沿 z 方向逐片 RMSE", fontsize=10)
     ax_z.grid(True, alpha=0.3)
 
-    # ---- suptitle (与 Python 版相同格式, 含时间戳) ----
+    # ---- suptitle (含实际迭代轮数 + 时间戳) ----
+    tr = cfg.get("target_rmse", 0.001)
     if mode == "axial":
         st = (f"ASTRA CUDA Cone-beam (32x512x512, {n_angles}角度, {n_subsets}子集)\n"
-              f"+ Hybrid IR (OS-SART×10+TV×10+FDK混合10%)\n{ts}")
+              f"+ Hybrid IR (OS-SART×{n_tv}+TV×{n_tv}+FDK混合10%, RMSE≤{tr:.3f}提前停止)\n{ts}")
     else:
         st = (f"ASTRA CUDA Helical Cone-beam (32x512x512, {n_angles}角度, pitch=16.0mm, {n_subsets}子集)\n"
-              f"+ Hybrid IR (OS-SART×10+TV×10+FDK混合10%)\n{ts}")
+              f"+ Hybrid IR (OS-SART×{n_tv}+TV×{n_tv}+FDK混合10%, RMSE≤{tr:.3f}提前停止)\n{ts}")
     plt.suptitle(st, fontsize=12, fontweight="bold", y=0.98)
 
     out_png = os.path.join(d, "astra_cone_hybrid.png")

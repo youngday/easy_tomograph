@@ -344,7 +344,8 @@ std::string json_result(const AlgorithmResult& r) {
 // ============================================================================
 // 主流水线
 // ============================================================================
-int run_pipeline(bool helical, const std::string& phantom_path, const std::string& outdir) {
+int run_pipeline(bool helical, const std::string& phantom_path, const std::string& outdir,
+                 int max_epochs, double target_rmse) {
     constexpr size_t slice = (size_t)N * N;
 
     printf("%s\n", kSep60);
@@ -468,9 +469,9 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     };
 
     // ============================
-    // B. TV-OS-SART
+    // B. TV-OS-SART (提前停止: RMSE ≤ target 即停, 默认 ≤0.001)
     // ============================
-    printf("%s\nB. TV-OS-SART\n%s\n", kSep55, kSep55);
+    printf("%s\nB. TV-OS-SART (RMSE≤%.3f 提前停止, 上限%d轮)\n%s\n", kSep55, target_rmse, max_epochs, kSep55);
     const float beta0 = 0.002f, decay = 0.8f, w_z = 1.5f;
     std::vector<float> rec_tv = rec_fdk_n;
     double t_tv_total = 0.0;
@@ -479,7 +480,7 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     std::vector<float> best_rec;
     double t_sirt = 0.0, t_tv = 0.0;  // 耗时构成统计
     g_tv_gpu_ok = true;               // 优先 GPU TV, 失败自动回退 CPU
-    for (int ni = 1; ni <= 10; ++ni) {
+    for (int ni = 1; ni <= max_epochs; ++ni) {
         Stopwatch sw_sirt;
         ossart_epoch(rec_tv);
         t_sirt += sw_sirt.ms();
@@ -492,6 +493,10 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
         if (r < best_rmse) { best_rmse = r; best_ssim = s; best_rec = ls; best_t = t_tv_total; best_ni = ni; }
         printf("   TV-OS-SART x%3d (β=%.4f): RMSE=%.5f, SSIM=%.4f, 累计%.0fms\n",
                ni, (double)(beta0 * std::pow(decay, ni - 1)), r, s, t_tv_total);
+        if (target_rmse > 0.0 && r <= target_rmse) {
+            printf("   ✓ RMSE=%.5f ≤ %.3f, 提前停止于 x%d\n", r, target_rmse, ni);
+            break;
+        }
     }
     printf("   >> 最优: TV-OS-SART x%d: RMSE=%.5f\n", best_ni, best_rmse);
     double tv_improv = (1 - best_rmse / fdk_noisy_rmse) * 100;
@@ -500,24 +505,40 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     printf("   TV-OS-SART z-profile: mean=%.5f, max=%.5f\n", best_tv_zprof.mean, best_tv_zprof.max);
 
     // ============================
-    // C. Hybrid IR (OS10 + TV10(β↓) + FDK 混合 10%)
+    // C. Hybrid IR (OS + TV(β↓) + FDK 混合 10%, 提前停止: RMSE ≤ target)
     // ============================
-    printf("%s\nC. Hybrid IR (OS-SART×10 + TV×10(β递减) + FDK混合 10%%)\n%s\n", kSep55, kSep55);
+    printf("%s\nC. Hybrid IR (OS-SART×%d + TV×%d(β递减) + FDK混合 10%%, RMSE≤%.3f 提前停止)\n%s\n",
+           kSep55, max_epochs, max_epochs, target_rmse, kSep55);
     Stopwatch sw_h;
     std::vector<float> rec_h = rec_fdk_n;
-    for (int ni = 0; ni < 10; ++ni) {
+    int hyb_epochs = max_epochs;
+    for (int ni = 0; ni < max_epochs; ++ni) {
         Stopwatch sw_sirt2;
         ossart_epoch(rec_h);
         t_sirt += sw_sirt2.ms();
         Stopwatch sw_tv2;
         tv_denoise(rec_h, beta0 * std::pow(decay, ni), w_z);
         t_tv += sw_tv2.ms();
+        hyb_epochs = ni + 1;
+        if (target_rmse > 0.0) {
+            // 用混合副本评估 (最终结果口径), 不修改 rec_h
+            std::vector<float> blend(nvol);
+            for (size_t i = 0; i < nvol; ++i)
+                blend[i] = 0.9f * rec_h[i] + 0.1f * rec_fdk_n[i];
+            double r = calc_rmse(linear_scale(blend, vol_gt), vol_gt);
+            if (r <= target_rmse) {
+                printf("   ✓ Hybrid RMSE=%.5f ≤ %.3f, 提前停止于 x%d\n", r, target_rmse, hyb_epochs);
+                break;
+            }
+        }
     }
+    // 最终混合 + 标定 (算法与 Python 版一致)
     for (size_t i = 0; i < nvol; ++i)
         rec_h[i] = 0.9f * rec_h[i] + 0.1f * rec_fdk_n[i];
-    double t_hybrid = sw_h.ms();
     std::vector<float> rec_h_ls = linear_scale(rec_h, vol_gt);
-    double r_hybrid = calc_rmse(rec_h_ls, vol_gt), s_hybrid = calc_ssim(rec_h_ls, vol_gt);
+    double r_hybrid = calc_rmse(rec_h_ls, vol_gt);
+    double s_hybrid = calc_ssim(rec_h_ls, vol_gt);
+    double t_hybrid = sw_h.ms();
     ZProfile hybrid_zprof = calc_z_profile(rec_h_ls, vol_gt);
     printf("   Hybrid IR: RMSE=%.5f, SSIM=%.4f, %.0fms\n", r_hybrid, s_hybrid, t_hybrid);
     printf("   z-profile: mean=%.5f, max=%.5f\n", hybrid_zprof.mean, hybrid_zprof.max);
@@ -550,8 +571,9 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     printf("%-30s %8.0f ms  %10.5f  %8.4f %10.5f\n", tv_name.c_str(), best_t, best_rmse, best_ssim, best_tv_zprof.mean);
     printf("%-30s %8.0f ms  %10.5f  %8.4f %10.5f\n", "Hybrid IR", t_hybrid, r_hybrid, s_hybrid, hybrid_zprof.mean);
     printf("%s\n", kSep72);
-    printf("耗时构成: SIRT(200次子集迭代)=%.0fms, TV(20次)=%.0fms%s\n",
-           t_sirt, t_tv, g_tv_gpu_ok ? " (GPU)" : " (CPU)");
+    int n_sirt = (best_ni + hyb_epochs) * n_subsets;
+    printf("耗时构成: SIRT(%d次子集迭代)=%.0fms, TV(%d次)=%.0fms%s\n",
+           n_sirt, t_sirt, best_ni + hyb_epochs, t_tv, g_tv_gpu_ok ? " (GPU)" : " (CPU)");
 
     // 摘要 JSON (结构对齐 Python 版 summary.json)
     std::ostringstream js;
@@ -560,6 +582,9 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
        << "  \"config\": {\"N\": " << N << ", \"nz\": " << nz << ", \"n_angles\": " << n_angles
        << ", \"n_subsets\": " << n_subsets << ", \"DSO\": 1000, \"iso_det\": 500";
     if (helical) js << ", \"pitch\": 16.0";
+    js << std::setprecision(3)
+       << ", \"target_rmse\": " << target_rmse
+       << ", \"epochs\": {\"tv_ossart\": " << best_ni << ", \"hybrid\": " << hyb_epochs << "}";
     js << "},\n  \"results\": {\n"
        << "    \"Pure FDK\": " << json_result({fdk_rmse, fdk_ssim, fdk_t}) << ",\n"
        << "    \"FDK(noisy)\": " << json_result({fdk_noisy_rmse, fdk_noisy_ssim, fdk_noisy_t}) << ",\n";

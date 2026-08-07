@@ -60,9 +60,11 @@ cmake --build build -j
 # 2. 生成与 Python 版完全一致的含噪声 sinogram (numpy 噪声, 轴向/螺旋各一份)
 .venv/bin/python src_astra_cpp/tools/make_sino_noisy.py both
 
-# 3. 重建 (会自动加载共享噪声文件; 找不到时回退到内置 mt19937 噪声)
+# 3. 重建 (默认 RMSE≤0.001 提前停止, 详见下)
 src_astra_cpp/build/astra_axial    src_astra_cpp/data/vol_gt.raw img_3d_axial/astra_cpp
 src_astra_cpp/build/astra_helical  src_astra_cpp/data/vol_gt.raw img_3d_helical/astra_cpp
+#    可选参数: [max_epochs=10] [target_rmse=0.001]
+#    例: 跑满 10 轮不做提前停止: ... img_3d_axial/astra_cpp 10 0
 
 # 4. 渲染对比图 (C++ 跑完会自动调用, 无需手动; 也可手动执行)
 .venv/bin/python src_astra_cpp/tools/render_results.py axial helical
@@ -93,15 +95,23 @@ src_astra_cpp/build/astra_helical  src_astra_cpp/data/vol_gt.raw img_3d_helical/
 
 (数值为 RMSE / SSIM, 见各目录下的 `*_summary.json`。)
 
-## 耗时 (GTX 1660, 与 Python 基线 summary.json 对比)
+## 迭代轮数与耗时 (GTX 1660, RMSE≤0.001 提前停止)
 
-| 阶段 | Python | C++ (CPU TV) | C++ (GPU TV) | C++ (GPU 常驻 SART) |
-|---|---|---|---|---|
-| Pure FDK | ~301 ms | ~101 ms | ~100 ms | **~100 ms** (3×) |
-| TV-OS-SART x10 | ~5006 ms | ~4855 ms | ~4030 ms | **~2720 ms** |
-| Hybrid IR | ~4762 ms | ~4527 ms | ~3500 ms | **~2620 ms** |
+默认在 **RMSE ≤ 0.001** 时提前停止 (上限 10 轮, 可用 `target_rmse`/`max_epochs` 调):
 
-## 为什么能再快 30% (GPU 常驻 OS-SART, 方案 A)
+| 阶段 | 轮数 | RMSE | 耗时 | vs 旧 10 轮 | vs Python 10 轮 |
+|---|---|---|---|---|---|
+| 轴向 TV-OS-SART | **x6** | 0.00096 | **~1.65 s** | 2723→1648 ms | 5006→1648 ms (3×) |
+| 轴向 Hybrid IR | **x7** | 0.00093 | **~2.27 s** | 2620→2272 ms | 4762→2272 ms (2.1×) |
+| 螺旋 TV-OS-SART | **x6** | 0.00098 | **~1.70 s** | — | — |
+| 螺旋 Hybrid IR | **x7** | 0.00094 | **~2.36 s** | — | — |
+
+SIRT 迭代次数 200 → **130** (-35%), TV 调用 20 → 13。
+
+> 注: `Pure FDK` / `FDK(noisy)` 的 RMSE (轴向 0.00088/0.00278, 螺旋 0.00129/0.00295)
+> 是单次反投影的固有属性, 与迭代次数无关, 不参与提前停止判定。
+
+## 耗时分解 (GPU 常驻 OS-SART, 方案 A)
 
 旧实现每个子集迭代都经历 `CPU memcpy → run(1)(上传→内核→下载) → CPU memcpy`
 (每次 ~40ms, 其中 ~12ms 是传输)。新实现 `src/sart_gpu.cpp` 用 libastra 导出的

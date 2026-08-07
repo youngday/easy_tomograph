@@ -8,6 +8,27 @@ ASTRA 的 **Python 接口传探测器中心**,而 C++ 直接构造 `CConeVecProj
 
 ASTRA 的 3D FDK **只有 `CCudaFDKAlgorithm3D`** 一个实现,类型注册为 `"FDK_CUDA"`——头文件目录里**没有 CPU 版 3D FDK**(见 `third_party/astra/include/astra/`,仅 `CudaFDKAlgorithm3D.h`)
 - 我们的 C++ 代码直接实例化该类,`run()` → `CompositeGeometryManager::doFDK` → `astraCUDA3d::FDK`(`fdk.cu` 的 CUDA 内核)
+## optimize #003
+
+RMSE ≤ 0.001 提前停止已实现并验证。
+
+## 结果(默认参数:目标 RMSE 0.001,上限 10 轮)
+
+| 阶段 | 轮数 | RMSE | 耗时 | 对比旧 10 轮 |
+|---|---|---|---|---|
+| 轴向 TV-OS-SART | **x6** | 0.00096 ✓ | **1648ms** | 2723→1648 (1.65×) |
+| 轴向 Hybrid IR | **x7** | 0.00093 ✓ | **2272ms** | 2620→2272 (1.15×) |
+| 螺旋 TV-OS-SART | **x6** | 0.00098 ✓ | **1703ms** | — |
+| 螺旋 Hybrid IR | **x7** | 0.00094 ✓ | **2358ms** | — |
+
+- **SIRT 迭代 200 → 130 次(-35%)**,TV 调用 20 → 13 次
+- 完整流水线 wall:9.57s → **7.92s**;vs Python 基线:TV-OS-SART **3.0×**、Hybrid **2.1×**
+- 每轮迭代后评估 RMSE(线性标定后),达标立即停;Hybrid 用混合副本评估(不改算法,最终混合只做一次,与 Python 版一致)
+
+
+```sh
+astra_axial [phantom.raw] [outdir] [max_epochs=10] [target_rmse=0.001]
+
 
 ## optimize # 002
 **新文件**
