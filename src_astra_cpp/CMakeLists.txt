@@ -27,7 +27,7 @@ if(NOT EXISTS "${ASTRA_LIBRARY}")
 endif()
 get_filename_component(ASTRA_DIR "${ASTRA_LIBRARY}" DIRECTORY)
 
-add_library(astracpp_common STATIC src/common.cpp src/tv_kernel.cu)
+add_library(astracpp_common STATIC src/common.cpp src/tv_kernel.cu src/sart_gpu.cpp)
 target_include_directories(astracpp_common PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/astra/include)
 target_compile_definitions(astracpp_common PUBLIC ASTRA_CUDA)

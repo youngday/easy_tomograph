@@ -15,6 +15,9 @@ src_astra_cpp/
 ├── src/
 │   ├── common.h              # 公共接口
 │   ├── common.cpp            # 核心流水线 (几何/TV/噪声/度量/IO)
+│   ├── sart_gpu.h/.cpp       # GPU 常驻 OS-SART (复刻 SIRT3D_CUDA, 消除传输开销)
+│   ├── tv_gpu.h / tv_kernel.cu  # GPU TV 去噪 (CUDA 内核)
+│   ├── astra_geometry.h      # 共享 cone_vec 几何构建 (中心→角落约定)
 │   ├── main_axial.cpp        # 轴向入口  → astra_axial
 │   └── main_helical.cpp      # 螺旋入口  → astra_helical
 ├── tools/
@@ -92,15 +95,27 @@ src_astra_cpp/build/astra_helical  src_astra_cpp/data/vol_gt.raw img_3d_helical/
 
 ## 耗时 (GTX 1660, 与 Python 基线 summary.json 对比)
 
-| 阶段 | Python | C++ (CPU TV) | C++ (GPU TV) |
-|---|---|---|---|
-| Pure FDK | ~301 ms | ~101 ms | **~100 ms** (3×) |
-| TV-OS-SART x10 | ~5006 ms | ~4855 ms | **~4030 ms** |
-| Hybrid IR | ~4762 ms | ~4527 ms | **~3500 ms** |
+| 阶段 | Python | C++ (CPU TV) | C++ (GPU TV) | C++ (GPU 常驻 SART) |
+|---|---|---|---|---|
+| Pure FDK | ~301 ms | ~101 ms | ~100 ms | **~100 ms** (3×) |
+| TV-OS-SART x10 | ~5006 ms | ~4855 ms | ~4030 ms | **~2720 ms** |
+| Hybrid IR | ~4762 ms | ~4527 ms | ~3500 ms | **~2620 ms** |
 
-耗时大头是 SIRT3D_CUDA 的 200 次子集迭代 (~7.1 s)—— 两边调用的是**同一个
-ASTRA CUDA 内核**, 这部分时间相同, C++ 无法再缩短; C++ 的收益来自: 去掉 Python
-每迭代调用/拷贝开销 (SIRT 单次 ~36ms vs ~50ms) + **TV 改为自写 CUDA 内核**
-(20 次共 ~0.2s, Python 因未装 cupy 只能 CPU numpy)。
+## 为什么能再快 30% (GPU 常驻 OS-SART, 方案 A)
 
-如需自行对比 TV 速度: `src/tv_kernel.cu` 与 `src_3d_axial/tv_gpu.py` 算法等价。
+旧实现每个子集迭代都经历 `CPU memcpy → run(1)(上传→内核→下载) → CPU memcpy`
+(每次 ~40ms, 其中 ~12ms 是传输)。新实现 `src/sart_gpu.cpp` 用 libastra 导出的
+GPU 常驻内核 (`astraCUDA3d::FP/BP` + `processVol3D` 算术) 自写 OS-SART 循环,
+**精确复刻 `CudaSirtAlgorithm3D` 的更新公式**:
+
+```
+v += pixelWeight * Aᵀ·( lineWeight · (b − A·v) )
+lineWeight = 1/(A·1),  pixelWeight = 1/(Aᵀ·1),  relaxation = 1
+```
+
+体积全程驻留 GPU, 每 epoch 只上传/下载一次 → 每迭代 ~40ms → ~25ms
+(SIRT 200 次迭代 6.75s → 5.0s)。运算顺序/内核与 ASTRA 完全相同,
+**结果与 Python 版逐位一致** (z-profile 除个别舍入边界外 max-diff = 0)。
+
+其余收益不变: 去掉 Python 每迭代调用/拷贝开销 + TV 改为自写 CUDA 内核
+(`src/tv_kernel.cu`, 20 次共 ~0.2s)。

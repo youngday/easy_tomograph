@@ -9,6 +9,22 @@ ASTRA 的 **Python 接口传探测器中心**,而 C++ 直接构造 `CConeVecProj
 ASTRA 的 3D FDK **只有 `CCudaFDKAlgorithm3D`** 一个实现,类型注册为 `"FDK_CUDA"`——头文件目录里**没有 CPU 版 3D FDK**(见 `third_party/astra/include/astra/`,仅 `CudaFDKAlgorithm3D.h`)
 - 我们的 C++ 代码直接实例化该类,`run()` → `CompositeGeometryManager::doFDK` → `astraCUDA3d::FDK`(`fdk.cu` 的 CUDA 内核)
 
+## optimize # 002
+**新文件**
+- `src/sart_gpu.h/.cpp` — GPU 常驻 OS-SART:用 libastra 导出的 GPU 内核(`astraCUDA3d::FP/BP` + `processVol3D`)自写 SIRT 循环,**精确复刻 `CudaSirtAlgorithm3D` 更新公式**(从源码逐行核对):`v += 1/(Aᵀ·1) · Aᵀ·(1/(A·1)·(b−A·v))`,体积全程驻留 GPU
+- `src/astra_geometry.h` — 共享几何构建(探测器中心→角落约定只此一处)
+- `third_party/astra-src/` — **ASTRA v2.5.0 完整源码已永久保存**(按你要求不再删除,含 tarball)
+
+## 提速结果(GTX 1660)
+
+| 阶段 | 优化前 | 方案 A 后 | vs Python |
+|---|---|---|---|
+| TV-OS-SART x10 | 3905 ms | **2723 ms** (1.43×) | 5006→2723 (**1.84×**) |
+| Hybrid IR | 3472 ms | **2620 ms** (1.33×) | 4762→2620 (**1.82×**) |
+| SIRT 200 次迭代 | 6.75 s | **5.02 s**(每次 33.8→25.1ms) | — |
+
+原理:旧的每子集迭代都做 `CPU memcpy + 上传 + 内核 + 下载`(~12ms/次传输);现在体积驻留 GPU,每 epoch 只传一次(约 10× 传输削减),内核本身不变。
+
 ## optimize # 001
 
 为什么之前"没少"

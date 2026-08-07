@@ -12,6 +12,9 @@
 
 #include "common.h"
 
+#include "astra_geometry.h"
+#include "sart_gpu.h"
+
 #include <astra/Globals.h>
 #include <astra/Config.h>
 #include <astra/Algorithm.h>
@@ -20,7 +23,6 @@
 #include <astra/Data3D.h>
 #include <astra/CudaProjector3D.h>
 #include <astra/CudaFDKAlgorithm3D.h>
-#include <astra/CudaSirtAlgorithm3D.h>
 #include <astra/CudaForwardProjectionAlgorithm3D.h>
 #include <astra/Filters.h>
 
@@ -64,14 +66,6 @@ constexpr const char* kSep55 = "------------------------------------------------
 constexpr const char* kSep70 = "======================================================================";  // 70
 constexpr const char* kSep72 = "------------------------------------------------------------------------";  // 72
 
-struct SubsetObjects {
-    std::unique_ptr<astra::CConeVecProjectionGeometry3D> geom;
-    std::unique_ptr<astra::CFloat32ProjectionData3D> sino;
-    std::unique_ptr<astra::CFloat32VolumeData3D> vol;
-    std::unique_ptr<astra::CCudaProjector3D> proj;
-    std::unique_ptr<astra::CCudaSirtAlgorithm3D> alg;
-};
-
 // ---------------------------------------------------------------------------
 // 计时
 // ---------------------------------------------------------------------------
@@ -103,35 +97,11 @@ void save_raw(const std::string& path, const std::vector<float>& v) {
 }
 
 // ---------------------------------------------------------------------------
-// 几何: 锥束 cone_vec (与 Python 逐段一致)
-//   轴向: 源/探测器在 xy 平面旋转
-//   螺旋: 同时沿 z 方向线性移动, z ∈ [-pitch/2, pitch/2]
-// 注意: 直接构造函数接受的是探测器"角落"(bottom-left)约定, 而 Python 接口
-//       给的是探测器"中心", 由 Config 初始化路径自动转换
-//       (见 src/ConeVecProjectionGeometry3D.cpp initializeAngles)。
-//       这里手动做同样的转换: fDetS -= 0.5*row*v + 0.5*col*u
+// 几何: 锥束 cone_vec (与 Python 逐段一致, 探测器角落约定见 astra_geometry.h)
 // ---------------------------------------------------------------------------
 std::vector<astra::SConeProjection> build_vectors(bool helical) {
-    std::vector<astra::SConeProjection> vecs(n_angles);
-    for (int i = 0; i < n_angles; ++i) {
-        double th = 2.0 * M_PI * i / n_angles;  // linspace(0,360,180,endpoint=False)
-        double c = std::cos(th), s = std::sin(th);
-        double z_src = helical ? pitch_mm * (th / (2.0 * M_PI) - 0.5) : 0.0;
-        // 探测器中心 (Python 接口约定)
-        double dcx = -DSD_det * s, dcy = DSD_det * c, dcz = z_src;
-        // 探测器 u/v 向量
-        double ux = det_pix * c, uy = det_pix * s, uz = 0.0;
-        double vx = 0.0, vy = 0.0, vz = det_pix;
-        // 中心 → 角落 (bottom-left): 减半个探测器尺寸
-        double sx = dcx - 0.5 * n_det_row * vx - 0.5 * n_det_col * ux;
-        double sy = dcy - 0.5 * n_det_row * vy - 0.5 * n_det_col * uy;
-        double sz = dcz - 0.5 * n_det_row * vz - 0.5 * n_det_col * uz;
-        vecs[i] = {DSO * s, -DSO * c, z_src,   // source
-                   sx, sy, sz,                 // detector bottom-left 角落
-                   ux, uy, uz,                 // det u-vector
-                   vx, vy, vz};                // det v-vector
-    }
-    return vecs;
+    return astra_cpp_build_vectors(helical, n_angles, n_det_row, n_det_col,
+                                   DSO, DSD_det, det_pix, pitch_mm);
 }
 
 // ---------------------------------------------------------------------------
@@ -483,45 +453,17 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     printf("   FDK(noisy) RMSE=%.5f, SSIM=%.4f, %.0fms\n",
            fdk_noisy_rmse, fdk_noisy_ssim, fdk_noisy_t);
 
-    // ---- 预分配 10 个子集 SIRT3D_CUDA 对象 (与 Python 复用对象一致) ----
-    std::vector<SubsetObjects> subs;
-    subs.reserve(n_subsets);
-    for (int i = 0; i < n_subsets; ++i) {
-        std::vector<astra::SConeProjection> subvecs;
-        subvecs.reserve(sub_size);
-        std::vector<astra::SConeProjection> full = build_vectors(helical);
-        for (int a = i * sub_size; a < (i + 1) * sub_size; ++a)
-            subvecs.push_back(full[a]);
-        SubsetObjects s;
-        s.geom = std::make_unique<astra::CConeVecProjectionGeometry3D>(
-            sub_size, n_det_row, n_det_col, std::move(subvecs));
-        s.sino.reset(astra::createCFloat32ProjectionData3DMemory(*s.geom));
-        float* dst = s.sino->getFloat32Memory();
-        size_t k = 0;
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-        for (int64_t row64 = 0; row64 < n_det_row; ++row64) {
-            int row = (int)row64;
-            size_t rk = (size_t)row * sub_size * n_det_col;
-            const float* src = sino_noisy.data() + (size_t)row * n_angles * n_det_col + (size_t)i * sub_size * n_det_col;
-            for (int a = 0; a < sub_size; ++a)
-                std::memcpy(dst + rk + (size_t)a * n_det_col,
-                            src + (size_t)a * n_det_col, n_det_col * sizeof(float));
-        }
-        (void)k;
-        s.vol.reset(astra::createCFloat32VolumeData3DMemory(volGeom));
-        s.proj = std::make_unique<astra::CCudaProjector3D>(*s.geom, volGeom);
-        s.alg = std::make_unique<astra::CCudaSirtAlgorithm3D>(s.proj.get(), s.sino.get(), s.vol.get());
-        subs.push_back(std::move(s));
+    // ---- GPU 常驻 OS-SART (复刻 SIRT3D_CUDA 更新公式, 体积驻留 GPU) ----
+    std::unique_ptr<SARTGpu> sart = std::make_unique<SARTGpu>();
+    std::string sart_err;
+    if (!sart->init(helical, sino_noisy, sart_err)) {
+        printf("错误: GPU 常驻 SART 初始化失败: %s\n", sart_err.c_str());
+        return 1;
     }
-
-    // OS-SART 一步: 每子集 1 次 SIRT 迭代 (与 Python fast_sirt/fast_ossart 一致)
-    auto ossart_step = [&](std::vector<float>& rec) {
-        for (auto& s : subs) {
-            std::memcpy(s.vol->getFloat32Memory(), rec.data(), nvol * sizeof(float));
-            s.alg->run(1);
-            std::memcpy(rec.data(), s.vol->getFloat32Memory(), nvol * sizeof(float));
+    auto ossart_epoch = [&](std::vector<float>& rec) {
+        if (!sart->run(rec, 1, rec, sart_err)) {
+            printf("错误: GPU 常驻 SART 运行失败: %s\n", sart_err.c_str());
+            std::exit(1);
         }
     };
 
@@ -539,7 +481,7 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     g_tv_gpu_ok = true;               // 优先 GPU TV, 失败自动回退 CPU
     for (int ni = 1; ni <= 10; ++ni) {
         Stopwatch sw_sirt;
-        ossart_step(rec_tv);
+        ossart_epoch(rec_tv);
         t_sirt += sw_sirt.ms();
         Stopwatch sw_tv;
         tv_denoise(rec_tv, beta0 * std::pow(decay, ni - 1), w_z);
@@ -565,7 +507,7 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     std::vector<float> rec_h = rec_fdk_n;
     for (int ni = 0; ni < 10; ++ni) {
         Stopwatch sw_sirt2;
-        ossart_step(rec_h);
+        ossart_epoch(rec_h);
         t_sirt += sw_sirt2.ms();
         Stopwatch sw_tv2;
         tv_denoise(rec_h, beta0 * std::pow(decay, ni), w_z);
