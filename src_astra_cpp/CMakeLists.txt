@@ -29,8 +29,7 @@ get_filename_component(ASTRA_DIR "${ASTRA_LIBRARY}" DIRECTORY)
 
 add_library(astracpp_common STATIC src/common.cpp src/tv_kernel.cu)
 target_include_directories(astracpp_common PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/astra/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb)
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/astra/include)
 target_compile_definitions(astracpp_common PUBLIC ASTRA_CUDA)
 target_compile_options(astracpp_common PRIVATE -O3)
 target_link_libraries(astracpp_common PUBLIC CUDA::cudart)

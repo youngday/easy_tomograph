@@ -21,8 +21,7 @@ src_astra_cpp/
 │   ├── make_phantom.py       # 用 tomophantom 生成体模 .raw (体模无 C++ API)
 │   └── render_results.py     # 将结果渲染为对比图 (matplotlib)
 ├── third_party/
-│   ├── astra/include/astra/  # ASTRA Toolbox v2.5.0 C++ 头文件 (GPLv3, 官方源码)
-│   └── stb/stb_image_write.h # 单头文件 PNG 输出 (public domain)
+│   └── astra/include/astra/  # ASTRA Toolbox v2.5.0 C++ 头文件 (GPLv3, 官方源码)
 └── data/                     # 体模 .raw (gitignored, 由 make_phantom.py 生成)
 ```
 
@@ -63,9 +62,9 @@ src_astra_cpp/build/astra_helical  src_astra_cpp/data/vol_gt.raw img_3d_helical/
 ```
 
 输出: `img_{axial,helical}/astra_cpp/` 下的 `astra_cone_hybrid.png`
-(**与 Python 版同款 3×4 结果图**, 尺寸/布局/标题/suptitle 完全一致)、
-`cpp_*.png` (中片 + 误差图)、`cpp_*.raw` (FDK/TV/Hybrid 结果体)、
-`cpp_summary.json` (指标 + z-profile)、`cpp_zprofile.csv`。
+(**与 Python 版同款 3×4 结果图**, 尺寸/布局/标题/suptitle 完全一致, C++ 跑完自动渲染)、
+`cpp_*.raw` (FDK/TV/Hybrid 结果体)、`cpp_summary.json` (指标 + z-profile)、
+`cpp_zprofile.csv`。(不生成中间过程的切片 PNG)
 
 ## 与 Python 版的差异
 

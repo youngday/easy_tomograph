@@ -12,9 +12,6 @@
 
 #include "common.h"
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
-
 #include <astra/Globals.h>
 #include <astra/Config.h>
 #include <astra/Algorithm.h>
@@ -350,44 +347,8 @@ ZProfile calc_z_profile(const std::vector<float>& rec, const std::vector<float>&
 }
 
 // ---------------------------------------------------------------------------
-// 输出: PNG 切片 (stb) + 摘要 JSON
+// 输出: 摘要 JSON
 // ---------------------------------------------------------------------------
-void write_slice_png(const std::string& path, const std::vector<float>& vol,
-                     int z, const std::vector<float>& soft_mask,
-                     float vmin, float vmax) {
-    const float* src = vol.data() + (size_t)z * N * N;
-    std::vector<unsigned char> buf((size_t)N * N);
-    float range = vmax - vmin;
-    for (size_t y = 0; y < N; ++y)
-        for (size_t x = 0; x < N; ++x) {
-            size_t i = y * N + x;
-            float v = (src[i] - vmin) / range * soft_mask[i];
-            buf[i] = (unsigned char)std::max(0, std::min(255, (int)std::lround(v * 255.0f)));
-        }
-    stbi_write_png(path.c_str(), N, N, 1, buf.data(), N);
-}
-
-void write_error_png(const std::string& path, const std::vector<float>& vol,
-                     const std::vector<float>& gt, int z,
-                     const std::vector<float>& soft_mask) {
-    const float* r = vol.data() + (size_t)z * N * N;
-    const float* g = gt.data() + (size_t)z * N * N;
-    std::vector<float> e((size_t)N * N);
-    for (size_t i = 0; i < (size_t)N * N; ++i) e[i] = r[i] - g[i];
-    std::vector<float> sorted = e;
-    std::sort(sorted.begin(), sorted.end());
-    float v = std::max(0.005f, (float)std::fabs(sorted[(size_t)((size_t)N * N * 95 / 100)]) * 1.2f);
-    std::vector<unsigned char> buf((size_t)N * N);
-    for (size_t i = 0; i < (size_t)N * N; ++i) {
-        float t = 0.5f + e[i] / (2.0f * v);
-        buf[i] = (unsigned char)std::max(0, std::min(255, (int)std::lround(t * 255.0f)));
-    }
-    // 误差图同样乘软遮罩 (避免外部为 0 的假误差)
-    for (size_t i = 0; i < (size_t)N * N; ++i)
-        buf[i] = (unsigned char)(buf[i] * soft_mask[i]);
-    stbi_write_png(path.c_str(), N, N, 1, buf.data(), N);
-}
-
 std::string json_arr(const std::vector<float>& v, int prec) {
     std::ostringstream os;
     os << "[";
@@ -456,15 +417,7 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     std::memcpy(sino.data(), sino_data->getFloat32Memory(), nsino * sizeof(float));
     printf("   完成: %.0fms, 形状 (%d, %d, %d)\n", sw_fp.ms(), n_det_row, n_angles, n_det_col);
 
-    // ---- 软遮罩 (可视化用) ----
-    std::vector<float> soft_mask((size_t)N * N);
-    for (size_t y = 0; y < N; ++y)
-        for (size_t x = 0; x < N; ++x) {
-            float dist = std::sqrt((float)((double)x - N / 2.0) * (x - N / 2.0) +
-                                   ((double)y - N / 2.0) * (y - N / 2.0));
-            float body_r = N * 0.42f;
-            soft_mask[y * N + x] = std::max(0.0f, std::min(1.0f, (body_r + 20 - dist) / 20));
-        }
+    // ---- 软遮罩已不需要 (中间切片 PNG 已移除, 最终图由 render_results.py 计算) ----
 
     // ============================
     // A. Pure FDK
@@ -621,13 +574,6 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
     save_raw(outdir + "/cpp_hybrid.raw", rec_h_ls);
 
     int mid = nz / 2;
-    write_slice_png(outdir + "/cpp_gt.png", vol_gt, mid, soft_mask, 0.0f, 0.05f);
-    write_slice_png(outdir + "/cpp_fdk.png", fdk_rec, mid, soft_mask, 0.0f, 0.05f);
-    write_slice_png(outdir + "/cpp_tv.png", best_rec, mid, soft_mask, 0.0f, 0.05f);
-    write_slice_png(outdir + "/cpp_hybrid.png", rec_h_ls, mid, soft_mask, 0.0f, 0.05f);
-    write_error_png(outdir + "/cpp_err_fdk.png", fdk_rec, vol_gt, mid, soft_mask);
-    write_error_png(outdir + "/cpp_err_tv.png", best_rec, vol_gt, mid, soft_mask);
-    write_error_png(outdir + "/cpp_err_hybrid.png", rec_h_ls, vol_gt, mid, soft_mask);
 
     // 汇总表
     printf("\n%s\n", kSep70);
@@ -673,7 +619,7 @@ int run_pipeline(bool helical, const std::string& phantom_path, const std::strin
         zcsv << z << "," << fdk_zprof.per_slice[z] << "," << hybrid_zprof.per_slice[z]
              << "," << best_tv_zprof.per_slice[z] << "\n";
 
-    printf("   => %s/cpp_*.png, cpp_*.raw, cpp_zprofile.csv\n", outdir.c_str());
+    printf("   => %s/cpp_*.raw, cpp_summary.json, cpp_zprofile.csv\n", outdir.c_str());
 
     // ---- 渲染与 Python 版同款结果图 (自动调用 tools/render_results.py) ----
     {
