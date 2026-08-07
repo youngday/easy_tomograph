@@ -1,1 +1,5 @@
 ./venv/
+.venv/
+src_astra_cpp/build/
+src_astra_cpp/data/
+*.raw

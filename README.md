@@ -76,3 +76,12 @@ nviwatch
 ## cupy
 
 uv pip install cupy-cuda12x 2>&1 | tail -5
+
+
+## cpp
+
+cd src_astra_cpp && cmake -S . -B build && cmake --build build -j
+# 仓库根目录:
+.venv/bin/python src_astra_cpp/tools/make_phantom.py
+src_astra_cpp/build/astra_axial    src_astra_cpp/data/vol_gt.raw img_3d_axial/astra_cpp
+src_astra_cpp/build/astra_helical  src_astra_cpp/data/vol_gt.raw img_3d_helical/astra_cpp
