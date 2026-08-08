@@ -54,6 +54,7 @@ fn main() {
         .arg("-O3")
         .arg("-DASTRA_CUDA")
         .arg(format!("-I{}", astra_headers.display()))
+        .arg(format!("-I{cuda_dir}/include")) // cuda_runtime.h
         .arg("-c")
         .arg(crate_dir.join("c_api/astra_c_api.cpp"))
         .arg("-o")

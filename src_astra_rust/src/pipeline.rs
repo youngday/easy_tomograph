@@ -98,8 +98,9 @@ pub fn run_pipeline(
     let gt_max = vol_gt.iter().fold(f32::MIN, |a, &b| a.max(b));
     println!("   体模: [{:.5}, {:.5}]", gt_min, gt_max);
 
-    // ---- 2. 几何 + FP ----
-    let geom = match Geom::create(helical) {
+    // ---- 2. 几何 (向量由 Rust 生成) + FP ----
+    let vectors = crate::geometry::build_vectors(helical);
+    let geom = match Geom::create(&vectors) {
         Ok(g) => g,
         Err(e) => {
             println!("错误: 几何创建失败: {}", e);
@@ -184,26 +185,14 @@ pub fn run_pipeline(
         fdk_noisy_rmse, fdk_noisy_ssim, fdk_noisy_t
     );
 
-    // ---- 6. GPU 常驻 OS-SART ----
-    let sart = match Sart::create(helical, &sino_noisy) {
+    // ---- 6. GPU 常驻 OS-SART (循环控制在 Rust) ----
+    let sart = match Sart::create(&vectors, &sino_noisy) {
         Ok(s) => s,
         Err(e) => {
             println!("错误: GPU 常驻 SART 初始化失败: {}", e);
             return 1;
         }
     };
-    let mut sart_err = String::new();
-    let mut ossart_epoch = |rec: &mut Vec<f32>| -> Result<(), String> {
-        let tmp = rec.clone(); // 避免 sart.run(&tmp, …, rec) 的别名借用
-        match sart.run(&tmp, 1, rec) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                sart_err = e;
-                Err(sart_err.clone())
-            }
-        }
-    };
-
     // ---- 7. B. TV-OS-SART (提前停止) ----
     println!(
         "{}\nB. TV-OS-SART (RMSE≤{:.3} 提前停止, 上限{}轮)\n{}",
@@ -223,7 +212,7 @@ pub fn run_pipeline(
     let mut t_tv = 0.0f64;
     for ni in 1..=max_epochs {
         let sw_sirt = Stopwatch::new();
-        if let Err(e) = ossart_epoch(&mut rec_tv) {
+        if let Err(e) = sart.run_inplace(&mut rec_tv, 1) {
             println!("错误: SART 运行失败: {}", e);
             return 1;
         }
@@ -233,7 +222,8 @@ pub fn run_pipeline(
             println!("错误: TV 失败: {}", e);
             return 1;
         }
-        t_tv += sw_tv.ms();
+        let tv_ms = sw_tv.ms();
+        t_tv += tv_ms;
         t_tv_total += sw_sirt.ms() + sw_tv.ms();
         let ls = metrics::linear_scale(&rec_tv, &vol_gt);
         let r = metrics::calc_rmse(&ls, &vol_gt);
@@ -283,7 +273,7 @@ pub fn run_pipeline(
     let mut hyb_epochs = max_epochs;
     for ni in 0..max_epochs {
         let sw_sirt2 = Stopwatch::new();
-        if let Err(e) = ossart_epoch(&mut rec_h) {
+        if let Err(e) = sart.run_inplace(&mut rec_h, 1) {
             println!("错误: SART 运行失败: {}", e);
             return 1;
         }
