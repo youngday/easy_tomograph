@@ -71,7 +71,25 @@ src_astra_rust/target/release/astra_rs_helical  src_astra_cpp/data/vol_gt.raw im
 | TV-OS-SART x6 | 0.00096 / 0.9935 | 0.00096 / 0.9935 | 0.00098 / 0.9933 | 0.00098 / 0.9933 |
 | Hybrid IR (x7) | 0.00093 / 0.9940 | 0.00093 / 0.9940 | 0.00094 / 0.9938 | 0.00094 / 0.9938 |
 
-z-profile 与 C++ 版 **max-diff = 0.00e+00** (逐位一致)。
+## 测试
+
+```sh
+# 纯 CPU 单元测试 (18 个): 几何向量 / 度量 / 噪声 / 子集切分
+cargo test --release
+
+# GPU 集成测试 (2 个): 输出 vs C++ 参考 (需先跑 src_astra_cpp 生成 img_3d_*/astra_cpp/)
+cargo test --release -- --ignored
+```
+
+- 单元测试无需 GPU/数据, 默认 `cargo test` 即可运行
+- 集成测试对比 `cpp_{fdk,fdk_noisy,tv,hybrid}.raw` 全精度数据与提前停止轮次:
+  GPU 内核路径 (FP/FDK/SART/TV) 与数据搬运逐位一致; CPU 端 `linear_scale` 的
+  并行浮点归约顺序不同 (C++ OpenMP vs Rust 分块) 导致最终 raw 有 ≤~4e-9 的
+  ulp 级差异, 故容差取 `1e-5` (远小于目标 RMSE 1e-3, 仍能抓住真实回归)
+- 两个 GPU 测试共用显存互斥锁串行执行 (GTX 1660 仅 6GB)
+
+z-profile 与 C++ 版在 5 位小数精度下 **max-diff = 0.00e+00**; GPU 内核路径
+(FP/FDK/SART/TV) 与数据搬运逐位一致, 最终 raw 全精度对比 ≤~4e-9 (见测试章节)。
 
 耗时 (GTX 1660): TV-OS-SART ~1.7s, Hybrid ~2.3-2.4s — 与 C++ (~1.65s / ~2.3s) 相当
 (快 ~5-8%, 去掉每轮 33MB 的 CPU 克隆后开销只剩 FFI 与 H2D/D2H 传输, 大头仍是
