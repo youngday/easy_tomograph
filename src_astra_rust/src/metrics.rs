@@ -193,3 +193,81 @@ pub fn calc_z_profile(rec: &[f32], gt: &[f32]) -> ZProfile {
         max,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_close(a: f64, b: f64, tol: f64) {
+        assert!((a - b).abs() < tol, "{a} vs {b}");
+    }
+
+    #[test]
+    fn rmse_known_value() {
+        let gt = [1.0f32, 2.0, 3.0, 4.0];
+        let rec = [1.0f32, 2.0, 4.0, 4.0]; // 差 {0,0,1,0}
+        assert_close(calc_rmse(&rec, &gt), 0.5, 1e-12);
+        assert_close(calc_rmse(&gt, &gt), 0.0, 1e-12);
+    }
+
+    #[test]
+    fn rmse_masks_background() {
+        let gt = [0.0f32, 1.0, 2.0, 3.0]; // gt[0]<=0.001 被掩码
+        let rec = [99.0f32, 1.0, 2.0, 3.0];
+        assert_close(calc_rmse(&rec, &gt), 0.0, 1e-12); // 背景差被忽略
+    }
+
+    #[test]
+    fn linear_scale_identity() {
+        // rec*2 + 0 = gt
+        let rec = [1.0f32, 2.0, 3.0, 4.0];
+        let gt = [2.0f32, 4.0, 6.0, 8.0];
+        let out = linear_scale(&rec, &gt);
+        for (o, g) in out.iter().zip(gt.iter()) {
+            assert_close(*o as f64, *g as f64, 1e-4);
+        }
+    }
+
+    #[test]
+    fn ssim_identical_is_one() {
+        let a: Vec<f32> = (0..4096).map(|i| ((i % 100) as f32) / 50.0).collect();
+        assert_close(calc_ssim(&a, &a), 1.0, 1e-9);
+    }
+
+    #[test]
+    fn ssim_range() {
+        let a: Vec<f32> = (0..4096).map(|i| (i % 97) as f32).collect();
+        let b: Vec<f32> = a.iter().map(|x| x * 0.7 + 5.0).collect();
+        let s = calc_ssim(&a, &b);
+        assert!(s > 0.5 && s <= 1.0, "ssim={s}");
+    }
+
+    /// z-profile: 完全一致 → 逐片 RMSE 全 0
+    #[test]
+    fn zprofile_identical_all_zero() {
+        let n = N * N * NZ;
+        let gt = vec![1.0f32; n];
+        let rec = vec![1.0f32; n];
+        let zp = calc_z_profile(&rec, &gt);
+        assert_eq!(zp.per_slice.len(), NZ);
+        assert_close(zp.mean, 0.0, 1e-12);
+        assert_eq!(zp.max, 0.0);
+    }
+
+    /// z-profile: 单层偏移 → 该层 RMSE 非零, 其余为 0
+    #[test]
+    fn zprofile_single_slice_off() {
+        let slice = N * N;
+        let n = slice * NZ;
+        let gt = vec![1.0f32; n];
+        let mut rec = vec![1.0f32; n];
+        for i in 1 * slice..2 * slice {
+            rec[i] = 2.0; // 第 1 层整体 +1
+        }
+        let zp = calc_z_profile(&rec, &gt);
+        assert_close(zp.per_slice[1] as f64, 1.0, 1e-3);
+        assert_eq!(zp.per_slice[0], 0.0);
+        assert_eq!(zp.per_slice[2], 0.0);
+        assert!(zp.max > 0.0);
+    }
+}

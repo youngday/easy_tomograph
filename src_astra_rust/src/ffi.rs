@@ -161,6 +161,24 @@ impl Geom {
 }
 
 impl Sart {
+    /// 子集 sinogram 切分: 全角 sino [row][angle][col] → 子集 i 缓冲 [row][sub_angle][col]
+    /// 子集 i 取角度 [i*18, (i+1)*18) (与 C++ 版 fill_subset_sino 布局一致)
+    fn subset_sino(sino_noisy: &[f32], i: usize) -> Vec<f32> {
+        debug_assert_eq!(sino_noisy.len(), NSINO);
+        let sub_size = N_ANGLES / N_SUBSETS;
+        let sub_len = N_DET_ROW * sub_size * N_DET_COL;
+        let mut sub = vec![0.0f32; sub_len];
+        for row in 0..N_DET_ROW {
+            for a in 0..sub_size {
+                let src_off = (row * N_ANGLES + i * sub_size + a) * N_DET_COL;
+                let dst_off = (row * sub_size + a) * N_DET_COL;
+                sub[dst_off..dst_off + N_DET_COL]
+                    .copy_from_slice(&sino_noisy[src_off..src_off + N_DET_COL]);
+            }
+        }
+        sub
+    }
+
     /// 创建 GPU 常驻 SART: 分配缓冲/预计算权重 (shim), 子集 sinogram 切分 + 上传 (Rust)
     pub fn create(vectors: &[f64], sino_noisy: &[f32]) -> Result<Sart, String> {
         debug_assert_eq!(vectors.len(), VEC_FLOATS);
@@ -175,18 +193,8 @@ impl Sart {
         let sart = Sart(p);
         // 子集切分: sino 布局 [row][angle][col], 子集 i 取角度 [i*18, (i+1)*18)
         // 子集缓冲布局 [row][sub_angle][col] (与 C++ 版 fill_subset_sino 一致)
-        let sub_size = N_ANGLES / N_SUBSETS;
-        let sub_len = N_DET_ROW * sub_size * N_DET_COL;
         for i in 0..N_SUBSETS {
-            let mut sub = vec![0.0f32; sub_len];
-            for row in 0..N_DET_ROW {
-                for a in 0..sub_size {
-                    let src_off = (row * N_ANGLES + i * sub_size + a) * N_DET_COL;
-                    let dst_off = (row * sub_size + a) * N_DET_COL;
-                    sub[dst_off..dst_off + N_DET_COL]
-                        .copy_from_slice(&sino_noisy[src_off..src_off + N_DET_COL]);
-                }
-            }
+            let sub = Self::subset_sino(sino_noisy, i);
             let mut eb2 = err_buf();
             unsafe {
                 if astra_rs_sart_subset_upload(
@@ -298,4 +306,56 @@ pub fn check_sizes() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 子集切分布局: [row][angle][col] → [row][sub_angle][col], 子集 i 取角度 [i*18, (i+1)*18)
+    #[test]
+    fn subset_sino_layout() {
+        let sub_size = N_ANGLES / N_SUBSETS; // 18
+                                             // 用元素值编码位置: v = 1e6*row + 1e3*angle + col (f32 精确可表示)
+        let sino: Vec<f32> = (0..NSINO)
+            .map(|idx| {
+                let col = idx % N_DET_COL;
+                let a = (idx / N_DET_COL) % N_ANGLES;
+                let row = idx / (N_DET_COL * N_ANGLES);
+                (row * 1_000_000 + a * 1_000 + col) as f32
+            })
+            .collect();
+        for i in 0..N_SUBSETS {
+            let sub = Sart::subset_sino(&sino, i);
+            assert_eq!(sub.len(), N_DET_ROW * sub_size * N_DET_COL);
+            for idx in 0..sub.len() {
+                let col = idx % N_DET_COL;
+                let a = (idx / N_DET_COL) % sub_size;
+                let row = idx / (N_DET_COL * sub_size);
+                let expect = (row * 1_000_000 + (i * sub_size + a) * 1_000 + col) as f32;
+                assert_eq!(sub[idx], expect, "subset={} idx={}", i, idx);
+            }
+        }
+    }
+
+    /// 子集之间互不重叠且覆盖全部角度
+    #[test]
+    fn subset_sino_covers_all_angles() {
+        let sub_size = N_ANGLES / N_SUBSETS;
+        let mut seen = vec![false; N_ANGLES];
+        let sino = vec![0.0f32; NSINO];
+        for i in 0..N_SUBSETS {
+            let sub = Sart::subset_sino(&sino, i);
+            assert_eq!(sub.len(), N_DET_ROW * sub_size * N_DET_COL);
+            for a in 0..sub_size {
+                assert!(
+                    !seen[i * sub_size + a],
+                    "角度 {} 被多个子集使用",
+                    i * sub_size + a
+                );
+                seen[i * sub_size + a] = true;
+            }
+        }
+        assert!(seen.iter().all(|&s| s), "有角度未被任何子集覆盖");
+    }
 }

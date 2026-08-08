@@ -119,3 +119,56 @@ pub fn add_artifacts(sino: &[f32]) -> Vec<f32> {
     }
     noisy
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MT19937 标准验证向量 (seed=5489 是参考实现默认种子)
+    #[test]
+    fn mt19937_reference_sequence() {
+        let mut rng = Mt19937::new(5489);
+        assert_eq!(rng.next_u32(), 3499211612); // 第 1 个 tempered 输出
+        assert_eq!(rng.next_u32(), 581869302); // 第 2 个
+    }
+
+    #[test]
+    fn mt19937_deterministic() {
+        let mut a = Mt19937::new(2024);
+        let mut b = Mt19937::new(2024);
+        for _ in 0..10000 {
+            assert_eq!(a.next_u32(), b.next_u32());
+        }
+        let mut c = Mt19937::new(2025);
+        assert_ne!(c.next_u32(), a.next_u32(), "不同种子应产生不同序列");
+    }
+
+    #[test]
+    fn uniform_in_unit_range() {
+        let mut rng = Mt19937::new(7);
+        for _ in 0..1000 {
+            let u = rng.uniform();
+            assert!((0.0..1.0).contains(&u), "uniform 越界: {u}");
+        }
+    }
+
+    /// add_artifacts: 确定性 + 非负 + 尺寸正确
+    #[test]
+    fn add_artifacts_properties() {
+        let sino = vec![0.5f32; NSINO];
+        let a = add_artifacts(&sino);
+        let b = add_artifacts(&sino);
+        assert_eq!(a, b, "同输入两次调用应逐位一致");
+        assert_eq!(a.len(), NSINO);
+        assert!(a.iter().all(|&v| v >= 0.0), "噪声输出不应为负");
+    }
+
+    /// 有值输入 vs 零输入: 噪声后均值有变化 (确实注入了噪声)
+    #[test]
+    fn add_artifacts_changes_signal() {
+        let sino = vec![0.5f32; NSINO];
+        let a = add_artifacts(&sino);
+        let changed = a.iter().zip(sino.iter()).filter(|(x, y)| x != y).count();
+        assert!(changed > NSINO / 2, "仅 {} 个元素被改动", changed);
+    }
+}
