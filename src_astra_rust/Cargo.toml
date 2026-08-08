@@ -1,0 +1,17 @@
+[package]
+name = "astra_rs"
+version = "0.1.0"
+edition = "2021"
+description = "ASTRA 锥束混合重建 (Rust 版) — FFI 调用 ASTRA CUDA 内核, 管线/度量/IO 纯 Rust"
+
+[[bin]]
+name = "astra_rs_axial"
+path = "src/bin/axial.rs"
+
+[[bin]]
+name = "astra_rs_helical"
+path = "src/bin/helical.rs"
+
+[profile.release]
+opt-level = 3
+lto = true

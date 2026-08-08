@@ -2,7 +2,8 @@
 .venv/
 src_astra_cpp/build/
 src_astra_cpp/data/
+src_astra_rust/target/
 *.raw
-src_3d_axial/
-src_3d_helical/
 src_astra_cpp/third_party/astra-src/astra-toolbox-2.5.0/
+src_3d_axial/__pycache__/
+src_3d_helical/__pycache__/

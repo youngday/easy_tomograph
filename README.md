@@ -94,3 +94,11 @@ src_astra_cpp/build/astra_helical  src_astra_cpp/data/vol_gt.raw img_3d_helical/
 .venv/bin/python src_astra_cpp/tools/make_phantom.py        # 1. 体模
 .venv/bin/python src_astra_cpp/tools/make_sino_noisy.py both  # 2. 共享噪声 (轴向+螺旋)
 src_astra_cpp/build/astra_axial    ...                       # 3. 重建 (自动加载噪声)
+
+
+
+## rust 
+
+cd src_astra_rust && cargo build --release        # 零依赖, 离线可编
+src_astra_rust/target/release/astra_rs_axial    src_astra_cpp/data/vol_gt.raw img_3d_axial/astra_rs
+src_astra_rust/target/release/astra_rs_helical  src_astra_cpp/data/vol_gt.raw img_3d_helical/astra_rs
